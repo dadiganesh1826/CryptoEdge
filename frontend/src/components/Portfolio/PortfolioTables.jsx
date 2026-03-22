@@ -154,6 +154,38 @@ export function PositionsTable() {
         return () => clearInterval(interval);
     }, [userId]);
 
+    const handleClosePosition = async (p) => {
+        if (!userId || !p) return;
+        const opName = p.market === 'spot' ? 'sell' : 'close';
+        if (!window.confirm(`Are you sure you want to ${opName} this ${p.symbol} position?`)) return;
+
+        setLoading(true);
+        try {
+            // Determine side to close
+            const side = p.side === 'long' ? 'sell' : 'buy';
+            // For spot, round down slightly to avoid "Insufficient balance" due to fees/precision
+            const qty = p.market === 'spot' ? Math.floor(p.contracts * 1000000) / 1000000 : p.contracts;
+
+            await placeOrderDirect({
+                user_id: userId,
+                symbol: p.symbol,
+                side: side,
+                order_type: 'market',
+                trade_type: p.market,
+                amount: qty * (p.markPrice || 0),
+                quantity: qty,
+                leverage: p.leverage || 1,
+                is_close: true
+            });
+            fetchPositions();
+        } catch (err) {
+            console.error('[Portfolio] Close error:', err);
+            setError('Failed to close position');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     if (!userId) return <div className="p-4 text-white/40 italic">Not logged in.</div>;
 
     const filteredPositions = Array.isArray(positions) ? positions.filter(p => {
@@ -291,7 +323,9 @@ export function PositionsTable() {
                                         </td>
                                         <td className="table-cell text-right">
                                             <button
-                                                className={`px-2 py-1 rounded text-[10px] font-bold uppercase transition-all ${isSpot ? 'bg-warning/10 text-warning hover:bg-warning hover:text-dark-950' : 'bg-danger/10 text-danger hover:bg-danger hover:text-white'}`}
+                                                onClick={() => handleClosePosition(p)}
+                                                disabled={loading}
+                                                className={`px-2 py-1 rounded text-[10px] font-bold uppercase transition-all ${isSpot ? 'bg-warning/10 text-warning hover:bg-warning hover:text-dark-950' : 'bg-danger/10 text-danger hover:bg-danger hover:text-white'} ${loading ? 'opacity-50' : ''}`}
                                             >
                                                 {isSpot ? 'Sell' : 'Close'}
                                             </button>
@@ -360,6 +394,7 @@ export function HistoryTable() {
                             {history.map((h, i) => {
                                 const pnl = h.realized_pnl || 0;
                                 const isClose = h.is_close;
+                                const isFailed = h.status === 'failed';
 
                                 return (
                                     <tr key={h.id || i} className="table-row border-b border-white/[0.02]">
@@ -378,7 +413,7 @@ export function HistoryTable() {
                                         <td className="table-cell font-mono text-white/50">${h.price?.toLocaleString()}</td>
                                         <td className="table-cell font-mono text-white/50">${h.price?.toLocaleString()}</td>
                                         <td className="table-cell">
-                                            {isClose ? (
+                                            {isClose && !isFailed ? (
                                                 <div className={`font-mono font-bold ${pnl >= 0 ? 'text-success' : 'text-danger'}`}>
                                                     {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}
                                                 </div>

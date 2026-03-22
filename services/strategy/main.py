@@ -14,7 +14,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import json
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Text, JSON, func
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.dialects.postgresql import UUID
 from pydantic import BaseModel, Field, validator
@@ -51,8 +51,8 @@ class StrategyModel(Base):
     stop_loss        = Column(Float, nullable=True)
     last_filled_price = Column(Float, nullable=True)
     custom_settings  = Column(JSON, nullable=True) # Stores list of {price, amount}
-    created_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at       = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at       = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 Base.metadata.create_all(bind=engine)
@@ -113,7 +113,7 @@ class CreateStrategyRequest(BaseModel):
     user_id: str
     symbol: str = Field(..., description="e.g. BTC/USDT:USDT")
     base_price: float = Field(..., gt=0, description="First order price")
-    drop_percentage: float = Field(..., gt=0, le=50, description="% drop per level")
+    drop_percentage: float = Field(..., ge=0, le=50, description="% drop per level")
     levels: int = Field(..., ge=1, le=100)
     amount_per_order: float = Field(..., gt=0)
     leverage: int = Field(1, ge=1, le=125)

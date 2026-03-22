@@ -157,12 +157,26 @@ async def place_order(
         position_size = req.amount * req.leverage
         quantity = round(position_size / p_val, 6)
 
+    # Auto-detect is_close if not explicitly set
+    effective_is_close = req.is_close
+    if not effective_is_close:
+        # Check if user has an opposite position for this symbol
+        existing_pos = db.query(OrderModel).filter(
+            OrderModel.user_id == uuid.UUID(req.user_id),
+            OrderModel.symbol == req.symbol.upper(),
+            OrderModel.side == ("sell" if req.side == "buy" else "buy"),
+            OrderModel.status == "filled",
+            OrderModel.is_close == 0
+        ).first()
+        if existing_pos:
+            logger.info(f"Auto-detecting closing trade for {req.symbol} ({req.side})")
+            effective_is_close = True
+
     # Calculate realized PnL if this is a closing trade
     realized_pnl = 0.0
-    if req.is_close:
+    if effective_is_close:
         try:
             # Find the weighted avg cost for this symbol
-            # We already have a summary endpoint, let's use the local DB logic directly
             buy_orders = db.query(OrderModel).filter(
                 OrderModel.user_id == uuid.UUID(req.user_id),
                 OrderModel.symbol == req.symbol.upper(),
@@ -177,9 +191,7 @@ async def place_order(
                 avg_entry_price = total_entry_cost / total_entry_qty if total_entry_qty > 0 else 0
                 
                 if avg_entry_price > 0 and req.price is not None:
-                    # PnL = (Exit - Entry) * Qty (for Long/Spot)
-                    # PnL = (Entry - Exit) * Qty (for Short)
-                    is_short = req.trade_type == "futures" and req.side == "buy" # Buying back a short
+                    is_short = req.trade_type == "futures" and req.side == "buy"
                     if is_short:
                         realized_pnl = (avg_entry_price - req.price) * quantity
                     else:
@@ -202,7 +214,7 @@ async def place_order(
         trade_type=req.trade_type,
         take_profit=req.take_profit,
         stop_loss=req.stop_loss,
-        is_close=1 if req.is_close else 0,
+        is_close=1 if effective_is_close else 0,
         realized_pnl=realized_pnl,
         status="pending",
     )
@@ -327,7 +339,7 @@ async def place_order(
 
             else:
                 order_status = "failed"
-                error_detail = (await resp.json()).get("detail", "Unknown error")
+                error_detail = resp.json().get("detail", "Unknown error")
                 logger.error(f"Exchange order failed: {resp.text}")
     except Exception as e:
         logger.error(f"Forwarding to exchange failed: {e}")
@@ -568,7 +580,7 @@ async def get_order_history(user_id: str, db: Session = Depends(get_db)):
     """Fetch filled or cancelled orders (history)."""
     orders = db.query(OrderModel).filter(
         OrderModel.user_id == uuid.UUID(user_id),
-        OrderModel.status.in_(["filled", "cancelled"])
+        OrderModel.status.in_(["filled", "cancelled", "failed"])
     ).order_by(OrderModel.created_at.desc()).limit(50).all()
     
     return [
