@@ -63,7 +63,7 @@ export default function TradePanel() {
                 price: parseFloat(price) || currentPrice,
                 amount: parseFloat(amount),
                 quantity: parseFloat(quantity),
-                leverage,
+                leverage: effectiveLeverage,
                 take_profit: parseFloat(takeProfit) || null,
                 stop_loss: parseFloat(stopLoss) || null,
             });

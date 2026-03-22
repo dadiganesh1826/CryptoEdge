@@ -216,41 +216,42 @@ async def get_positions(
     try:
         positions = await exchange_fut.fetch_positions()
         await exchange_fut.close()
-        for p in positions:
-            size = float(p.get("contracts", 0) or p.get("size", 0))
-            if size != 0:
-                symbol = p.get("symbol")
-                info = p.get("info", {})
-                lev = p.get("leverage") or info.get("leverage") or "1"
-                liq_price = p.get("liquidationPrice") or info.get("liquidationPrice") or 0
-                entry_price = p.get("entryPrice") or info.get("entryPrice") or 0
-                pnl = p.get("unrealizedPnl") or info.get("unrealizedProfit") or 0
-                
-                # Fetch TP/SL from orders summary
-                tp, sl = None, None
-                try:
-                    async with httpx.AsyncClient() as client:
+        
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for p in positions:
+                size = float(p.get("contracts", 0) or p.get("size", 0))
+                if size != 0:
+                    symbol = p.get("symbol")
+                    info = p.get("info", {})
+                    lev = p.get("leverage") or info.get("leverage") or "1"
+                    liq_price = p.get("liquidationPrice") or info.get("liquidationPrice") or 0
+                    entry_price = p.get("entryPrice") or info.get("entryPrice") or 0
+                    pnl = p.get("unrealizedPnl") or info.get("unrealizedProfit") or 0
+                    
+                    # Fetch TP/SL from orders summary
+                    tp, sl = None, None
+                    try:
                         sum_resp = await client.get(f"{ORDERS_SERVICE_URL}/orders/summary/{user_id}/{symbol}")
                         if sum_resp.status_code == 200:
                             sum_data = sum_resp.json()
                             tp = sum_data.get("take_profit")
                             sl = sum_data.get("stop_loss")
-                except: pass
+                    except: pass
 
-                open_positions.append({
-                    "symbol": symbol,
-                    "market": "futures",
-                    "side": p.get("side"),
-                    "contracts": size,
-                    "entryPrice": float(entry_price),
-                    "markPrice": float(p.get("markPrice") or info.get("markPrice") or 0),
-                    "liquidationPrice": float(liq_price),
-                    "leverage": str(lev),
-                    "unrealizedPnl": float(pnl),
-                    "percentage": float(p.get("percentage") or info.get("percentage") or 0),
-                    "take_profit": tp,
-                    "stop_loss": sl,
-                })
+                    open_positions.append({
+                        "symbol": symbol,
+                        "market": "futures",
+                        "side": p.get("side"),
+                        "contracts": size,
+                        "entryPrice": float(entry_price),
+                        "markPrice": float(p.get("markPrice") or info.get("markPrice") or 0),
+                        "liquidationPrice": float(liq_price),
+                        "leverage": str(lev),
+                        "unrealizedPnl": float(pnl),
+                        "percentage": float(p.get("percentage") or info.get("percentage") or 0),
+                        "take_profit": tp,
+                        "stop_loss": sl,
+                    })
     except Exception as e:
         logger.error(f"Error fetching futures positions: {e}")
         if exchange_fut: await exchange_fut.close()
@@ -262,46 +263,45 @@ async def get_positions(
             balance = await exchange_spot.fetch_balance()
             await exchange_spot.close()
             
-            # Filter assets with balance > 0 (exclude USDT/quote)
-            for asset, qty in balance.get("total", {}).items():
-                if qty > 0 and asset not in ["USDT", "USDC", "USD"]:
-                    # Fetch average entry price and TP/SL for this spot asset
-                    entry_price = 0
-                    tp = None
-                    sl = None
-                    try:
-                        async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for asset, qty in balance.get("total", {}).items():
+                    if qty > 0 and asset not in ["USDT", "USDC", "USD"]:
+                        # Fetch average entry price and TP/SL for this spot asset
+                        entry_price = 0
+                        tp = None
+                        sl = None
+                        try:
                             sum_resp = await client.get(f"{ORDERS_SERVICE_URL}/orders/summary/{user_id}/{asset}/USDT")
                             if sum_resp.status_code == 200:
                                 s_data = sum_resp.json()
                                 entry_price = s_data.get("avg_price", 0)
                                 tp = s_data.get("take_profit")
                                 sl = s_data.get("stop_loss")
-                    except: pass
+                        except: pass
 
-                    # Fetch current price for PnL calculation
-                    mark_price = 0
-                    try:
-                        ticker = await exchange_spot.fetch_ticker(f"{asset}/USDT")
-                        mark_price = ticker.get("last", 0)
-                    except: pass
-                    
-                    pnl = (mark_price - entry_price) * qty if entry_price > 0 else 0
-                    pnl_pct = (pnl / (entry_price * qty)) * 100 if entry_price > 0 else 0
+                        # Fetch current price for PnL calculation
+                        mark_price = 0
+                        try:
+                            ticker = await exchange_spot.fetch_ticker(f"{asset}/USDT")
+                            mark_price = ticker.get("last", 0)
+                        except: pass
+                        
+                        pnl = (mark_price - entry_price) * qty if entry_price > 0 else 0
+                        pnl_pct = (pnl / (entry_price * qty)) * 100 if entry_price > 0 else 0
 
-                    open_positions.append({
-                        "symbol": f"{asset}/USDT",
-                        "market": "spot",
-                        "side": "long",
-                        "contracts": float(qty),
-                        "entryPrice": float(entry_price),
-                        "markPrice": float(mark_price),
-                        "unrealizedPnl": float(pnl),
-                        "percentage": float(pnl_pct),
-                        "take_profit": tp,
-                        "stop_loss": sl,
-                        "leverage": "1",
-                    })
+                        open_positions.append({
+                            "symbol": f"{asset}/USDT",
+                            "market": "spot",
+                            "side": "long",
+                            "contracts": float(qty),
+                            "entryPrice": float(entry_price),
+                            "markPrice": float(mark_price),
+                            "unrealizedPnl": float(pnl),
+                            "percentage": float(pnl_pct),
+                            "take_profit": tp,
+                            "stop_loss": sl,
+                            "leverage": "1",
+                        })
         except Exception as e:
             logger.error(f"Error fetching spot holdings: {e}")
             if exchange_spot: await exchange_spot.close()

@@ -122,7 +122,9 @@ export function PositionsTable() {
         if (!userId) return;
         setLoading(true);
         try {
-            const data = await getPositions(userId, { include_spot: true });
+            // getPositions only takes a boolean includeSpot. 
+            // x-user-id is handled by the interceptor.
+            const data = await getPositions(true);
             setPositions(data || []);
         } catch { }
         finally { setLoading(false); }

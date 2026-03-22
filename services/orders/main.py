@@ -181,7 +181,7 @@ async def place_order(
                 total_entry_qty = sum(o.quantity for o in buy_orders if o.quantity)
                 avg_entry_price = total_entry_cost / total_entry_qty if total_entry_qty > 0 else 0
                 
-                if avg_entry_price > 0:
+                if avg_entry_price > 0 and req.price is not None:
                     # PnL = (Exit - Entry) * Qty (for Long/Spot)
                     # PnL = (Entry - Exit) * Qty (for Short)
                     is_short = req.trade_type == "futures" and req.side == "buy" # Buying back a short
@@ -253,12 +253,41 @@ async def place_order(
                 if avg_price: order.price = avg_price
                 if filled_qty: order.quantity = filled_qty
                 
+                # Update realized PnL for market orders (close) if not calculated earlier
+                if avg_price and req.is_close and order.realized_pnl == 0:
+                    try:
+                        # Recalculate avg_entry_price for the position
+                        buy_orders = db.query(OrderModel).filter(
+                            OrderModel.user_id == uuid.UUID(req.user_id),
+                            OrderModel.symbol == req.symbol.upper(),
+                            OrderModel.side == ("buy" if req.trade_type == "spot" else ("sell" if req.side == "buy" else "buy")),
+                            OrderModel.status == "filled",
+                            OrderModel.is_close == 0
+                        ).all()
+                        if buy_orders:
+                            total_entry_cost = sum(o.price * o.quantity for o in buy_orders if o.price and o.quantity)
+                            total_entry_qty = sum(o.quantity for o in buy_orders if o.quantity)
+                            aep = total_entry_cost / total_entry_qty if total_entry_qty > 0 else 0
+                            if aep > 0:
+                                is_short = req.trade_type == "futures" and req.side == "buy"
+                                if is_short:
+                                    order.realized_pnl = (aep - avg_price) * (filled_qty or order.quantity)
+                                else:
+                                    order.realized_pnl = (avg_price - aep) * (filled_qty or order.quantity)
+                    except Exception as pnl_err:
+                        logger.error(f"Post-order PnL update failed: {pnl_err}")
+                
                 # CCXT status mapping: closed -> filled
-                if exchange_status in ["closed", "filled"]:
+                # CCXT status mapping: closed/OK -> filled
+                if exchange_status in ["closed", "filled", "OK", "success"]:
                     order_status = "filled"
                     order.filled_at = datetime.now(timezone.utc)
                 elif exchange_status in ["canceled", "cancelled"]:
                     order_status = "cancelled"
+                elif req.order_type == "market" and exchange_status is None:
+                    # Market orders that return without error are usually filled
+                    order_status = "filled"
+                    order.filled_at = datetime.now(timezone.utc)
                 else:
                     order_status = "open"
                 
