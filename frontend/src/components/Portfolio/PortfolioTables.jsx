@@ -262,16 +262,31 @@ export function PositionsTable() {
                                                 {(p.side || '—').toUpperCase()}
                                             </span>
                                         </td>
-                                        <td className="table-cell font-mono text-white/80">{p.contracts?.toFixed(isSpot ? 4 : 2)}</td>
-                                        <td className="table-cell font-mono text-white/50">${p.entryPrice?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) || '0.00'}</td>
-                                        <td className="table-cell font-mono text-white/50">${p.markPrice?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) || '0.00'}</td>
+                                        <td className="table-cell font-mono">
+                                            <div className="text-white/80">{p.contracts?.toFixed(isSpot ? 4 : 2)}</div>
+                                            <div className="text-[9px] text-white/30 truncate">
+                                                ≈ ${(p.contracts * p.markPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                            </div>
+                                        </td>
+                                        <td className="table-cell font-mono text-white/50">
+                                            {p.entryPrice > 0 ? `$${p.entryPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}` : '—'}
+                                        </td>
+                                        <td className="table-cell font-mono text-white/50">
+                                            ${p.markPrice?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) || '0.00'}
+                                        </td>
                                         <td className="table-cell">
-                                            <div className={`font-mono font-bold ${pnl >= 0 ? 'text-success' : 'text-danger'}`}>
-                                                {pnl >= 0 ? '+' : ''}${Number(pnl).toFixed(2)}
-                                            </div>
-                                            <div className={`text-[10px] font-bold ${pnlPct >= 0 ? 'text-success' : 'text-danger'}`}>
-                                                {pnlPct >= 0 ? '+' : ''}{Number(pnlPct).toFixed(2)}%
-                                            </div>
+                                            {p.entryPrice > 0 ? (
+                                                <>
+                                                    <div className={`font-mono font-bold ${pnl >= 0 ? 'text-success' : 'text-danger'}`}>
+                                                        {pnl >= 0 ? '+' : ''}${Number(pnl).toFixed(2)}
+                                                    </div>
+                                                    <div className={`text-[10px] font-bold ${pnlPct >= 0 ? 'text-success' : 'text-danger'}`}>
+                                                        {pnlPct >= 0 ? '+' : ''}{Number(pnlPct).toFixed(2)}%
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <div className="text-white/20 font-bold">——</div>
+                                            )}
                                         </td>
                                         <td className="table-cell">
                                             <div className="flex flex-col gap-0.5 relative group">
