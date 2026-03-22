@@ -1,0 +1,123 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: crypto_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - crypto_network
+
+  gateway:
+    build: ./gateway
+    container_name: crypto_gateway
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      - auth
+      - exchange
+      - strategy
+      - orders
+      - websocket
+    networks:
+      - crypto_network
+    restart: unless-stopped
+
+  auth:
+    build: ./services/auth
+    container_name: crypto_auth
+    ports:
+      - "8001:8001"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - crypto_network
+    restart: unless-stopped
+
+  exchange:
+    build: ./services/exchange
+    container_name: crypto_exchange
+    ports:
+      - "8002:8002"
+    env_file: .env
+    depends_on:
+      - auth
+    networks:
+      - crypto_network
+    restart: unless-stopped
+
+  strategy:
+    build: ./services/strategy
+    container_name: crypto_strategy
+    ports:
+      - "8003:8003"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      exchange:
+        condition: service_started
+    networks:
+      - crypto_network
+    restart: unless-stopped
+
+  orders:
+    build: ./services/orders
+    container_name: crypto_orders
+    ports:
+      - "8004:8004"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - crypto_network
+    restart: unless-stopped
+
+  websocket:
+    build: ./services/websocket
+    container_name: crypto_websocket
+    ports:
+      - "8005:8005"
+    env_file: .env
+    depends_on:
+      - exchange
+    networks:
+      - crypto_network
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: crypto_frontend
+    ports:
+      - "5173:5173"
+    env_file: .env
+    depends_on:
+      - gateway
+    networks:
+      - crypto_network
+    stdin_open: true
+
+volumes:
+  postgres_data:
+
+
+networks:
+  crypto_network:
+    driver: bridge

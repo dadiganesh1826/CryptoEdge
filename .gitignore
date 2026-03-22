@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+dist/
+build/
+.next/
+out/
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.protoc
+.mypy_cache/
+.pytest_cache/
+
+# Docker
+.docker/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+logs.txt
+out.txt
+
+# System
+.DS_Store
+Thumbs.db
+
+# Database
+db/data/
+*.db
+*.sqlite3
