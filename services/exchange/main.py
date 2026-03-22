@@ -570,8 +570,22 @@ async def get_order_status(
     exchange = await get_exchange_client(user_id, token, market_type, internal=is_internal)
     
     try:
-        # Some exchanges (like Binance) require the symbol to fetch a specific order
-        order = await exchange.fetch_order(order_id, symbol)
+        # 1. Primary Attempt
+        try:
+            order = await exchange.fetch_order(order_id, symbol)
+        except ccxt.OrderNotFound:
+            # 2. Fallback Attempt (Symbol Formatting)
+            # For Binance Futures, symbols often need a :USDT suffix
+            if exchange.id == 'binance' and market_type == 'future' and ':' not in symbol:
+                try:
+                    alt_sym = f"{symbol}:{symbol.split('/')[-1]}"
+                    logger.info(f"Retrying fetch_order with alt symbol: {alt_sym}")
+                    order = await exchange.fetch_order(order_id, alt_sym)
+                except ccxt.OrderNotFound:
+                    raise ccxt.OrderNotFound("Order still not found after alt symbol retry")
+            else:
+                raise
+
         return {
             "exchange_order_id": order.get("id"),
             "status": order.get("status"), # CCXT status: open, closed, canceled
@@ -582,7 +596,25 @@ async def get_order_status(
             "timestamp": order.get("timestamp"),
         }
     except ccxt.OrderNotFound:
-        # If not found, it might have been filled/cancelled and archived
+        # 3. Final Fallback: Fetch Recent Orders and Search
+        # This is slower but very robust
+        try:
+            logger.info(f"Final fallback: searching recent orders for {order_id} on {symbol}")
+            recent_orders = await exchange.fetch_orders(symbol, limit=20)
+            for o in recent_orders:
+                if o['id'] == order_id:
+                    return {
+                        "exchange_order_id": o.get("id"),
+                        "status": o.get("status"),
+                        "filled": o.get("filled"),
+                        "average": o.get("average"),
+                        "price": o.get("price"),
+                        "remaining": o.get("remaining"),
+                        "timestamp": o.get("timestamp"),
+                    }
+        except:
+            pass
+        
         return {"status": "unknown", "exchange_order_id": order_id}
     except ccxt.BaseError as e:
         logger.error(f"Fetch Order Error: {e}")

@@ -11,7 +11,7 @@ from typing import Optional
 import httpx
 from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import create_engine, Column, String, Text, DateTime
