@@ -185,19 +185,31 @@ async def get_balance(
     try:
         balance = await exchange.fetch_balance()
         await exchange.close()
+        
+        # Guard against empty/malformed balance responses
+        total = balance.get("total", {})
+        free = balance.get("free", {})
+        used = balance.get("used", {})
+
         # Return only non-zero balances
         filtered = {
-            k: v for k, v in balance["total"].items()
+            k: v for k, v in total.items()
             if isinstance(v, (int, float)) and v > 0
         }
+        
         return {
             "total": filtered,
-            "free": {k: balance["free"].get(k, 0) for k in filtered},
-            "used": {k: balance["used"].get(k, 0) for k in filtered},
+            "free": {k: free.get(k, 0) for k in filtered},
+            "used": {k: used.get(k, 0) for k in filtered},
         }
     except ccxt.BaseError as e:
         await exchange.close()
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"CCXT Balance Error: {e}")
+        raise HTTPException(status_code=400, detail=f"Exchange error: {str(e)}")
+    except Exception as e:
+        await exchange.close()
+        logger.error(f"Unexpected Balance Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal balance error: {str(e)}")
 
 
 @app.get("/exchange/positions")

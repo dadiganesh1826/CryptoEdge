@@ -55,10 +55,18 @@ async def proxy_request(request: Request, target_url: str) -> Response:
                 content=body,
                 params=dict(request.query_params),
             )
+            
+            # Filter headers to avoid encoding/length mismatches
+            excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive"]
+            forward_headers = {
+                k: v for k, v in resp.headers.items()
+                if k.lower() not in excluded_headers
+            }
+
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
-                headers=dict(resp.headers),
+                headers=forward_headers,
                 media_type=resp.headers.get("content-type"),
             )
         except httpx.ConnectError:
