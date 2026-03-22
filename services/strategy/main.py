@@ -13,7 +13,8 @@ from typing import Optional, List
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Text
+import json
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.dialects.postgresql import UUID
 from pydantic import BaseModel, Field, validator
@@ -32,8 +33,6 @@ SessionLocal = sessionmaker(bind=engine)
 
 class Base(DeclarativeBase):
     pass
-
-
 class StrategyModel(Base):
     __tablename__ = "strategies"
     id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -51,6 +50,7 @@ class StrategyModel(Base):
     take_profit      = Column(Float, nullable=True)
     stop_loss        = Column(Float, nullable=True)
     last_filled_price = Column(Float, nullable=True)
+    custom_settings  = Column(JSON, nullable=True) # Stores list of {price, amount}
     created_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -74,8 +74,12 @@ def get_next_price(last_price: float, drop_percent: float) -> float:
     return round(last_price * (1 - drop_percent / 100), 8)
 
 
-def calculate_all_levels(base_price: float, drop_pct: float, levels: int) -> List[dict]:
-    """Generate all ladder levels from base price."""
+def calculate_all_levels(base_price: float, drop_pct: float, levels: int, custom_settings=None) -> List[dict]:
+    """Generate all ladder levels from base price or custom settings."""
+    if custom_settings and isinstance(custom_settings, list):
+        return [{"level": i+1, "price": round(float(l['price']), 6), "amount": float(l.get('amount', 0))} 
+                for i, l in enumerate(custom_settings)]
+
     result = []
     price = base_price
     for i in range(1, levels + 1):
@@ -107,6 +111,7 @@ class CreateStrategyRequest(BaseModel):
     order_type: str = Field("futures", pattern="^(spot|futures)$")
     take_profit: Optional[float] = None
     stop_loss: Optional[float] = None
+    levels_config: Optional[List[dict]] = None # [{price, amount}]
 
     @validator("symbol")
     def upper_symbol(cls, v):
@@ -129,6 +134,7 @@ class StrategyResponse(BaseModel):
     take_profit: Optional[float]
     stop_loss: Optional[float]
     last_filled_price: Optional[float]
+    custom_settings: Optional[List[dict]]
     ladder_preview: List[dict]
     created_at: str
 
@@ -163,10 +169,19 @@ async def check_and_execute_strategy(strategy_id: str, auth_token: str):
             logger.info(f"Strategy {strategy_id} completed all {strategy.levels} levels")
             return
 
-        # Determine last price (base_price for level 1, last_filled_price for subsequent)
-        last_price = strategy.last_filled_price or strategy.base_price
+        # Determine target price and amount
         next_level = strategy.current_level + 1
-        target_price = get_next_price(last_price, strategy.drop_percentage) if strategy.current_level > 0 else strategy.base_price
+        target_price = 0
+        order_amount = strategy.amount_per_order
+
+        if strategy.custom_settings and len(strategy.custom_settings) >= next_level:
+            level_data = strategy.custom_settings[next_level - 1]
+            target_price = float(level_data['price'])
+            order_amount = float(level_data.get('amount', strategy.amount_per_order))
+        else:
+            # Fallback to fixed logic
+            last_price = strategy.last_filled_price or strategy.base_price
+            target_price = get_next_price(last_price, strategy.drop_percentage) if strategy.current_level > 0 else strategy.base_price
 
         # Fetch current market price
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -195,7 +210,7 @@ async def check_and_execute_strategy(strategy_id: str, auth_token: str):
             return
 
         # Calculate quantity
-        position_size = strategy.amount_per_order * strategy.leverage
+        position_size = order_amount * strategy.leverage
         quantity = round(position_size / current_price, 6)
 
         logger.info(
@@ -213,7 +228,7 @@ async def check_and_execute_strategy(strategy_id: str, auth_token: str):
                     "symbol": strategy.symbol,
                     "level": next_level,
                     "price": target_price,
-                    "amount": strategy.amount_per_order,
+                    "amount": order_amount,
                     "quantity": quantity,
                     "leverage": strategy.leverage,
                     "side": strategy.side,
@@ -291,6 +306,7 @@ async def create_strategy(
         order_type=req.order_type,
         take_profit=req.take_profit,
         stop_loss=req.stop_loss,
+        custom_settings=req.levels_config, # Store custom levels if provided
         current_level=0,
         status="active",
     )
@@ -311,9 +327,9 @@ async def create_strategy(
         max_instances=1,
     )
     active_jobs[strategy_id] = token
-    logger.info(f"Strategy created & scheduled: {strategy_id} — {req.symbol} {req.levels} levels {req.drop_percentage}% drop")
+    logger.info(f"Strategy created & scheduled: {strategy_id} — {req.symbol} {req.levels} levels")
 
-    preview = calculate_all_levels(req.base_price, req.drop_percentage, req.levels)
+    preview = calculate_all_levels(req.base_price, req.drop_percentage, req.levels, req.levels_config)
     return StrategyResponse(
         id=strategy_id,
         user_id=req.user_id,
@@ -330,6 +346,7 @@ async def create_strategy(
         take_profit=req.take_profit,
         stop_loss=req.stop_loss,
         last_filled_price=None,
+        custom_settings=req.levels_config,
         ladder_preview=preview,
         created_at=strategy.created_at.isoformat(),
     )
@@ -342,7 +359,7 @@ async def get_strategy(strategy_id: str, db: Session = Depends(get_db)):
     if not strategy:
         raise HTTPException(status_code=404, detail="Strategy not found")
 
-    preview = calculate_all_levels(strategy.base_price, strategy.drop_percentage, strategy.levels)
+    preview = calculate_all_levels(strategy.base_price, strategy.drop_percentage, strategy.levels, strategy.custom_settings)
     return StrategyResponse(
         id=str(strategy.id),
         user_id=str(strategy.user_id),
@@ -359,6 +376,7 @@ async def get_strategy(strategy_id: str, db: Session = Depends(get_db)):
         take_profit=strategy.take_profit,
         stop_loss=strategy.stop_loss,
         last_filled_price=strategy.last_filled_price,
+        custom_settings=strategy.custom_settings,
         ladder_preview=preview,
         created_at=strategy.created_at.isoformat(),
     )
@@ -370,7 +388,7 @@ async def get_user_strategies(user_id: str, db: Session = Depends(get_db)):
     strategies = db.query(StrategyModel).filter(StrategyModel.user_id == uuid.UUID(user_id)).all()
     result = []
     for s in strategies:
-        preview = calculate_all_levels(s.base_price, s.drop_percentage, s.levels)
+        preview = calculate_all_levels(s.base_price, s.drop_percentage, s.levels, s.custom_settings)
         result.append({
             "id": str(s.id),
             "symbol": s.symbol,
@@ -379,6 +397,7 @@ async def get_user_strategies(user_id: str, db: Session = Depends(get_db)):
             "current_level": s.current_level,
             "status": s.status,
             "last_filled_price": s.last_filled_price,
+            "custom_settings": s.custom_settings,
             "ladder_preview": preview[:5],  # Show first 5 levels in list
             "created_at": s.created_at.isoformat(),
         })

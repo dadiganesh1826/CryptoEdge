@@ -1,10 +1,17 @@
-import React, { useState, useCallback } from 'react';
-import { Bot, Play, StopCircle, ChevronDown, ChevronUp, Loader2, AlertTriangle, Check } from 'lucide-react';
+import React, { useState, useCallback, useEffect } from 'react';
+import { Bot, Play, StopCircle, ChevronDown, ChevronUp, Loader2, AlertTriangle, Check, Plus, Trash2, Zap } from 'lucide-react';
 import useAppStore from '../../store/useAppStore';
 import { createStrategy, stopStrategy } from '../../api/client';
 
 // Pure calculation — exported for reuse
-export function calcLadderLevels(basePrice, dropPct, levels) {
+export function calcLadderLevels(basePrice, dropPct, levels, isAdvanced, customLevels) {
+    if (isAdvanced) {
+        return customLevels.map((l, i) => ({
+            level: i + 1,
+            price: parseFloat(l.price) || 0,
+            amount: parseFloat(l.amount) || 0
+        })).filter(l => l.price > 0);
+    }
     const result = [];
     let price = parseFloat(basePrice);
     const drop = parseFloat(dropPct);
@@ -18,8 +25,9 @@ export function calcLadderLevels(basePrice, dropPct, levels) {
 }
 
 export default function StrategyPanel() {
-    const { userId, selectedSymbol, selectedSymbolDisplay, addStrategy, strategies, updateStrategyStatus } = useAppStore();
+    const { userId, selectedSymbol, selectedSymbolDisplay, addStrategy, strategies, updateStrategyStatus, currentPrice } = useAppStore();
 
+    const [isAdvanced, setIsAdvanced] = useState(false);
     const [basePrice, setBasePrice] = useState('');
     const [dropPct, setDropPct] = useState('3');
     const [levels, setLevels] = useState('5');
@@ -34,12 +42,29 @@ export default function StrategyPanel() {
     const [success, setSuccess] = useState('');
     const [previewOpen, setPreviewOpen] = useState(true);
 
-    const preview = calcLadderLevels(basePrice, dropPct, levels);
+    const [customLevels, setCustomLevels] = useState([
+        { price: '', amount: '100' },
+        { price: '', amount: '200' }
+    ]);
+
+    useEffect(() => {
+        if (currentPrice && !basePrice) setBasePrice(currentPrice.toString());
+    }, [currentPrice]);
+
+    const preview = calcLadderLevels(basePrice, dropPct, levels, isAdvanced, customLevels);
     const activeStrategies = strategies.filter((s) => s.status === 'active');
 
     const handleStart = async () => {
         if (!userId) { setError('Not connected to exchange'); return; }
-        if (!basePrice || !dropPct || !levels || !amount) { setError('Fill all required fields'); return; }
+
+        let levels_config = null;
+        if (isAdvanced) {
+            levels_config = preview.map(l => ({ price: l.price, amount: l.amount }));
+            if (levels_config.length === 0) { setError('Add at least one valid level'); return; }
+        } else {
+            if (!basePrice || !dropPct || !levels || !amount) { setError('Fill all required fields'); return; }
+        }
+
         setLoading(true);
         setError('');
         setSuccess('');
@@ -47,18 +72,19 @@ export default function StrategyPanel() {
             const data = await createStrategy({
                 user_id: userId,
                 symbol: selectedSymbol,
-                base_price: parseFloat(basePrice),
-                drop_percentage: parseFloat(dropPct),
-                levels: parseInt(levels),
-                amount_per_order: parseFloat(amount),
+                base_price: isAdvanced ? preview[0].price : parseFloat(basePrice),
+                drop_percentage: isAdvanced ? 0 : parseFloat(dropPct),
+                levels: isAdvanced ? preview.length : parseInt(levels),
+                amount_per_order: isAdvanced ? preview[0].amount : parseFloat(amount),
                 leverage: parseInt(leverage),
                 side,
                 order_type: tradeType,
                 take_profit: parseFloat(takeProfit) || null,
                 stop_loss: parseFloat(stopLoss) || null,
+                levels_config
             });
             addStrategy(data);
-            setSuccess(`Strategy started! ${data.levels} levels of ${dropPct}% drop on ${selectedSymbolDisplay}`);
+            setSuccess(`Strategy started! ${data.levels} levels placed on ${selectedSymbolDisplay}`);
         } catch (err) {
             setError(err.response?.data?.detail || 'Failed to start strategy');
         } finally {
@@ -75,6 +101,41 @@ export default function StrategyPanel() {
         }
     };
 
+    const addLevel = () => {
+        const lastLevel = customLevels[customLevels.length - 1];
+        const newPrice = lastLevel?.price ? parseFloat(lastLevel.price) * 0.97 : '';
+        setCustomLevels([...customLevels, { price: newPrice.toString(), amount: lastLevel?.amount || '100' }]);
+    };
+
+    const removeLevel = (index) => {
+        if (customLevels.length <= 1) return;
+        setCustomLevels(customLevels.filter((_, i) => i !== index));
+    };
+
+    const updateLevel = (index, field, value) => {
+        const newLevels = [...customLevels];
+        newLevels[index][field] = value;
+        setCustomLevels(newLevels);
+    };
+
+    const applyMartingale = () => {
+        const startAmount = parseFloat(amount) || 100;
+        const startPrice = parseFloat(basePrice) || currentPrice || 50000;
+        const num = parseInt(levels) || 5;
+        const drop = parseFloat(dropPct) || 3;
+
+        const newLevels = [];
+        let p = startPrice;
+        let a = startAmount;
+        for (let i = 0; i < num; i++) {
+            newLevels.push({ price: p.toFixed(2), amount: a.toFixed(2) });
+            p = p * (1 - drop / 100);
+            a = a * 2; // Double every level
+        }
+        setCustomLevels(newLevels);
+        setIsAdvanced(true);
+    };
+
     return (
         <div className="card h-full flex flex-col">
             {/* Header */}
@@ -86,12 +147,22 @@ export default function StrategyPanel() {
                     <h3 className="text-sm font-bold text-white">Ladder Bot</h3>
                     <p className="text-[10px] text-white/35">Sequential order strategy</p>
                 </div>
-                {activeStrategies.length > 0 && (
-                    <span className="ml-auto badge-green">{activeStrategies.length} active</span>
-                )}
+
+                <div className="ml-auto flex items-center gap-2">
+                    <button
+                        onClick={() => setIsAdvanced(!isAdvanced)}
+                        className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-all border ${isAdvanced ? 'bg-accent-cyan/10 border-accent-cyan/30 text-accent-cyan' : 'bg-white/5 border-white/10 text-white/30'
+                            }`}
+                    >
+                        {isAdvanced ? 'Advanced' : 'Basic'}
+                    </button>
+                    {activeStrategies.length > 0 && (
+                        <span className="badge-green">{activeStrategies.length} active</span>
+                    )}
+                </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
                 {/* Side + Type */}
                 <div className="grid grid-cols-2 gap-2">
                     <div>
@@ -101,8 +172,8 @@ export default function StrategyPanel() {
                                 <button key={s}
                                     onClick={() => setSide(s)}
                                     className={`flex-1 py-1.5 text-xs font-semibold rounded-md capitalize transition-all ${side === s
-                                            ? s === 'buy' ? 'bg-success/20 text-success' : 'bg-danger/20 text-danger'
-                                            : 'text-white/30 hover:text-white/50'
+                                        ? s === 'buy' ? 'bg-success/20 text-success' : 'bg-danger/20 text-danger'
+                                        : 'text-white/30 hover:text-white/50'
                                         }`}
                                 >{s}</button>
                             ))}
@@ -122,55 +193,82 @@ export default function StrategyPanel() {
                     </div>
                 </div>
 
-                {/* First order price */}
-                <div>
-                    <label className="input-label">First Order Price (USDT) <span className="text-danger">*</span></label>
-                    <input type="number" className="input" placeholder="e.g. 70000"
-                        value={basePrice} onChange={(e) => setBasePrice(e.target.value)} />
-                </div>
+                {!isAdvanced ? (
+                    <>
+                        {/* Basic Mode Inputs */}
+                        <div>
+                            <label className="input-label">Start Price (USDT) <span className="text-danger">*</span></label>
+                            <input type="number" className="input" placeholder="e.g. 70000"
+                                value={basePrice} onChange={(e) => setBasePrice(e.target.value)} />
+                        </div>
 
-                {/* Drop % */}
-                <div>
-                    <div className="flex justify-between items-center mb-1.5">
-                        <label className="input-label mb-0">Drop % per Level <span className="text-danger">*</span></label>
-                        <span className="text-accent-cyan font-bold text-sm">{dropPct}%</span>
+                        <div className="grid grid-cols-2 gap-2">
+                            <div>
+                                <label className="input-label">Drop % / Level</label>
+                                <input type="number" className="input" placeholder="3" step="0.1"
+                                    value={dropPct} onChange={(e) => setDropPct(e.target.value)} />
+                            </div>
+                            <div>
+                                <label className="input-label">Num Levels</label>
+                                <input type="number" className="input" placeholder="5"
+                                    value={levels} onChange={(e) => setLevels(e.target.value)} />
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="input-label">Amount per Order (USDT)</label>
+                            <div className="relative">
+                                <input type="number" className="input pr-12" placeholder="100"
+                                    value={amount} onChange={(e) => setAmount(e.target.value)} />
+                                <button
+                                    onClick={applyMartingale}
+                                    title="Convert to Martingale Advanced Strategy"
+                                    className="absolute right-2 top-1.5 p-1 rounded hover:bg-accent-indigo/20 text-accent-indigo transition-colors"
+                                >
+                                    <Zap className="w-3.5 h-3.5" />
+                                </button>
+                            </div>
+                        </div>
+                    </>
+                ) : (
+                    <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                            <label className="input-label mb-0">Custom Levels Config</label>
+                            <button onClick={addLevel} className="flex items-center gap-1 text-[10px] font-bold text-accent-cyan hover:text-accent-cyan/80">
+                                <Plus className="w-3 h-3" /> ADD LEVEL
+                            </button>
+                        </div>
+                        <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                            {customLevels.map((lvl, idx) => (
+                                <div key={idx} className="grid grid-cols-[1fr,1fr,32px] gap-2 items-center bg-white/[0.03] p-2 rounded-lg border border-white/5">
+                                    <input
+                                        type="number" className="input h-8 text-[11px] px-2" placeholder="Price"
+                                        value={lvl.price} onChange={(e) => updateLevel(idx, 'price', e.target.value)}
+                                    />
+                                    <input
+                                        type="number" className="input h-8 text-[11px] px-2" placeholder="Amount"
+                                        value={lvl.amount} onChange={(e) => updateLevel(idx, 'amount', e.target.value)}
+                                    />
+                                    <button onClick={() => removeLevel(idx)} className="p-1.5 rounded hover:bg-danger/10 text-danger/30 hover:text-danger">
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
                     </div>
-                    <input type="number" className="input" placeholder="3" step="0.1" min="0.1" max="50"
-                        value={dropPct} onChange={(e) => setDropPct(e.target.value)} />
-                </div>
+                )}
 
-                {/* Levels */}
-                <div>
-                    <label className="input-label">Number of Levels <span className="text-danger">*</span></label>
-                    <input type="number" className="input" placeholder="5" min="1" max="100"
-                        value={levels} onChange={(e) => setLevels(e.target.value)} />
-                </div>
-
-                {/* Amount + Leverage */}
+                {/* Shared Config */}
                 <div className="grid grid-cols-2 gap-2">
-                    <div>
-                        <label className="input-label">Amount/Order (USDT)</label>
-                        <input type="number" className="input" placeholder="100"
-                            value={amount} onChange={(e) => setAmount(e.target.value)} />
-                    </div>
                     <div>
                         <label className="input-label">Leverage</label>
                         <input type="number" className="input" min="1" max="125" placeholder="10"
                             value={leverage} onChange={(e) => setLeverage(e.target.value)} />
                     </div>
-                </div>
-
-                {/* TP / SL */}
-                <div className="grid grid-cols-2 gap-2">
                     <div>
                         <label className="input-label text-success">Take Profit</label>
                         <input type="number" className="input text-success placeholder-success/30"
                             placeholder="Optional" value={takeProfit} onChange={(e) => setTakeProfit(e.target.value)} />
-                    </div>
-                    <div>
-                        <label className="input-label text-danger">Stop Loss</label>
-                        <input type="number" className="input text-danger placeholder-danger/30"
-                            placeholder="Optional" value={stopLoss} onChange={(e) => setStopLoss(e.target.value)} />
                     </div>
                 </div>
 
@@ -182,7 +280,7 @@ export default function StrategyPanel() {
                             className="w-full flex items-center justify-between px-3 py-2.5 bg-dark-700/50 hover:bg-dark-700 transition-colors"
                         >
                             <span className="text-xs font-semibold text-white/60">
-                                Ladder Preview — {preview.length} Levels
+                                {isAdvanced ? 'Custom Preview' : 'Ladder Preview'} — {preview.length} Levels
                             </span>
                             {previewOpen ? <ChevronUp className="w-3.5 h-3.5 text-white/40" /> : <ChevronDown className="w-3.5 h-3.5 text-white/40" />}
                         </button>
@@ -196,7 +294,7 @@ export default function StrategyPanel() {
                                             <div className="flex items-center gap-2">
                                                 <span className={`text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center ${i === 0 ? 'bg-accent-cyan/20 text-accent-cyan' : 'bg-white/5 text-white/30'
                                                     }`}>{row.level}</span>
-                                                <span className="text-xs text-white/50">Level {row.level}</span>
+                                                <span className="text-xs text-white/50">${isAdvanced ? row.amount : (amount || 0)}</span>
                                             </div>
                                             <span className="text-xs font-mono font-semibold text-white">
                                                 ${row.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}
@@ -205,8 +303,8 @@ export default function StrategyPanel() {
                                     ))}
                                 </div>
                                 <div className="px-3 pb-2 pt-1 border-t border-white/5 flex justify-between text-[10px] text-white/30">
-                                    <span>Total Cost: ${(parseFloat(amount || 0) * parseInt(levels || 0)).toLocaleString()}</span>
-                                    <span>Each: ${parseFloat(amount || 0).toLocaleString()} @ {leverage}x</span>
+                                    <span>Total Value: ${preview.reduce((acc, l) => acc + (isAdvanced ? l.amount : parseFloat(amount || 0)), 0).toLocaleString()}</span>
+                                    <span>Margin: ${(preview.reduce((acc, l) => acc + (isAdvanced ? l.amount : parseFloat(amount || 0)), 0) / leverage).toFixed(2)} USDT</span>
                                 </div>
                             </div>
                         )}
@@ -225,7 +323,7 @@ export default function StrategyPanel() {
                                 <div key={s.id} className="flex items-center justify-between">
                                     <div>
                                         <span className="text-xs font-medium text-white/70">{s.symbol?.split(':')[0]}</span>
-                                        <span className="text-xs text-white/30 ml-2">Level {s.current_level}/{s.levels}</span>
+                                        <span className="text-xs text-white/30 ml-2">L{s.current_level}/{s.levels}</span>
                                     </div>
                                     <button
                                         onClick={() => handleStop(s.id)}
@@ -256,7 +354,7 @@ export default function StrategyPanel() {
             <div className="px-4 pb-4">
                 <button
                     onClick={handleStart}
-                    disabled={loading || !userId || !basePrice}
+                    disabled={loading || !userId || (!isAdvanced && !basePrice)}
                     className="w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-40 bg-gradient-to-r from-accent-indigo to-accent-purple hover:from-accent-purple hover:to-accent-indigo text-white shadow-lg shadow-accent-indigo/20"
                 >
                     {loading ? (
