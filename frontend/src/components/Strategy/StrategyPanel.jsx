@@ -302,14 +302,14 @@ export default function StrategyPanel() {
                                             >%</button>
                                         </div>
                                         <input
-                                            type="number" className="input h-7 text-[10px] px-1.5 flex-1 min-w-[60px]"
-                                            placeholder={lvl.type === 'price' ? "Price" : "Drop %"}
+                                            type="number" className="input h-7 text-[10px] px-2 flex-1 min-w-[80px]"
+                                            placeholder={lvl.type === 'price' ? "Target Price" : "Drop %"}
                                             value={lvl.value} onChange={(e) => updateLevel(idx, 'value', e.target.value)}
                                         />
-                                        <div className="text-[9px] text-white/20 font-bold">AMT</div>
+                                        <div className="text-[9px] text-white/20 font-bold ml-1">AMT</div>
                                         <input
-                                            type="number" className="input h-7 text-[10px] px-1.5 w-16"
-                                            placeholder="Sum"
+                                            type="number" className="input h-7 text-[10px] px-2 w-20"
+                                            placeholder="USDT"
                                             value={lvl.amount} onChange={(e) => updateLevel(idx, 'amount', e.target.value)}
                                         />
                                         <button onClick={() => removeLevel(idx)} className="p-1 rounded hover:bg-danger/10 text-danger/30 hover:text-danger">
@@ -332,15 +332,17 @@ export default function StrategyPanel() {
 
                 {/* Shared Config */}
                 <div className="grid grid-cols-2 gap-2">
-                    <div>
-                        <label className="input-label">Leverage</label>
-                        <input type="number" className="input" min="1" max="125" placeholder="10"
-                            value={leverage} onChange={(e) => setLeverage(e.target.value)} />
-                    </div>
-                    <div>
+                    {tradeType === 'futures' && (
+                        <div>
+                            <label className="input-label">Leverage</label>
+                            <input type="number" className="input" min="1" max="125" placeholder="10"
+                                value={leverage} onChange={(e) => setLeverage(e.target.value)} />
+                        </div>
+                    )}
+                    <div className={tradeType === 'futures' ? '' : 'col-span-2'}>
                         <label className="input-label text-success">Take Profit</label>
                         <input type="number" className="input text-success placeholder-success/30"
-                            placeholder="Optional" value={takeProfit} onChange={(e) => setTakeProfit(e.target.value)} />
+                            placeholder="Optional Profit Target" value={takeProfit} onChange={(e) => setTakeProfit(e.target.value)} />
                     </div>
                 </div>
 
