@@ -278,13 +278,7 @@ async def check_and_execute_strategy(strategy_id: str, auth_token: str):
 app = FastAPI(title="Strategy Service", version="1.0.0", docs_url="/strategy/docs")
 
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN, "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS handled by Gateway
 
 # Store active scheduler jobs: {strategy_id: auth_token}
 active_jobs: dict[str, str] = {}

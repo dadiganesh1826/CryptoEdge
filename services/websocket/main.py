@@ -24,13 +24,7 @@ AUTH_SVC_URL     = os.getenv("AUTH_SERVICE_URL", "http://localhost:8001")
 app = FastAPI(title="WebSocket Service", version="1.0.0", docs_url="/ws/docs")
 
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS handled by Gateway
 
 
 # ──────────────────────────────────────────────

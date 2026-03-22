@@ -120,13 +120,7 @@ class OrderResponse(BaseModel):
 app = FastAPI(title="Orders Service", version="1.0.0", docs_url="/orders/docs")
 
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN, "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS handled by Gateway
 
 
 @app.post("/orders/place", response_model=OrderResponse)
