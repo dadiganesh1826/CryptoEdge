@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
+import axios from 'axios';
 import { RefreshCw, TrendingUp, TrendingDown, Minus, Edit2 } from 'lucide-react';
 import useAppStore from '../../store/useAppStore';
 import { getUserOrders, getPositions, cancelOrder as cancelOrderApi, placeOrderDirect, getOrderHistory, updateTPSL } from '../../api/client';
