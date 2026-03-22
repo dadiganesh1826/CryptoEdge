@@ -214,120 +214,123 @@ async def get_positions(
     authorization: str = Header(...),
     user_id: str = Header(..., alias="x-user-id"),
 ):
-    """Fetch open futures positions and optionally spot holdings with parallelized data retrieval."""
+    """Fetch all portfolio data with maximum parallelism to prevent timeouts."""
     token = authorization.replace("Bearer ", "")
     open_positions = []
 
-    async def fetch_summary(client, symbol):
-        try:
-            resp = await client.get(f"{ORDERS_SERVICE_URL}/orders/summary/{user_id}/{symbol}", timeout=3.0)
-            return resp.json() if resp.status_code == 200 else {}
-        except: return {}
-
-    # 1. Futures
-    exchange_fut = await get_exchange_client(user_id, token, "future")
-    active_pos = []
+    # 1. Fetch Core Data (Positions & Balance) in Parallel
+    exchange_fut = None
+    exchange_spot = None
     try:
-        positions = await exchange_fut.fetch_positions()
-        active_pos = [p for p in positions if float(p.get("contracts", 0) or p.get("size", 0)) != 0]
+        exchange_fut = await get_exchange_client(user_id, token, "future")
+        fut_task = exchange_fut.fetch_positions()
+        
+        spot_task = None
+        if include_spot:
+            exchange_spot = await get_exchange_client(user_id, token, "spot")
+            spot_task = exchange_spot.fetch_balance()
+        
+        # Initial core fetch
+        fut_data = []
+        spot_data = {}
+        if spot_task:
+            results = await asyncio.gather(fut_task, spot_task, return_exceptions=True)
+            fut_data = results[0] if not isinstance(results[0], Exception) else []
+            spot_data = results[1] if not isinstance(results[1], Exception) else {}
+        else:
+            fut_data = await fut_task
+
+        active_fut = [p for p in fut_data if float(p.get("contracts", 0) or p.get("size", 0)) != 0]
+        spot_assets = [a for a, q in spot_data.get("total", {}).items() if q > 0 and a not in ["USDT", "USDC", "USD"]]
+        
+        # 2. Gather All Symbols for Summaries and Tickers
+        fut_symbols = [p["symbol"] for p in active_fut]
+        spot_symbols = [f"{a}/USDT" for a in spot_assets]
+        all_symbols = fut_symbols + spot_symbols
+
+        # 3. Parallel Fetch Summaries & Bulk Tickers
+        summaries = {}
+        tickers = {}
+        
+        async def fetch_bulk_summaries():
+            if not all_symbols: return {}
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(f"{ORDERS_SERVICE_URL}/orders/summaries/bulk", 
+                        json={"user_id": user_id, "symbols": all_symbols}, timeout=5.0)
+                    return resp.json() if resp.status_code == 200 else {}
+            except: return {}
+
+        async def fetch_bulk_tickers():
+            if not spot_symbols or not exchange_spot: return {}
+            try: return await exchange_spot.fetch_tickers(spot_symbols)
+            except: return {}
+
+        results = await asyncio.gather(fetch_bulk_summaries(), fetch_bulk_tickers())
+        summaries = results[0]
+        tickers = results[1]
+
+        # 4. Handle Missing Tickers in Parallel (Fallback)
+        missing_spot = [s for s in spot_symbols if not tickers.get(s)]
+        if missing_spot and exchange_spot:
+            async def safe_fetch(s):
+                try: return s, await exchange_spot.fetch_ticker(s)
+                except: return s, {}
+            
+            fallback_results = await asyncio.gather(*[safe_fetch(s) for s in missing_spot])
+            for s, t in fallback_results:
+                tickers[s] = t
+
+        # 5. Build Final Response
+        # Futures
+        for p in active_fut:
+            s = summaries.get(p["symbol"], {})
+            info = p.get("info", {})
+            open_positions.append({
+                "symbol": p["symbol"],
+                "market": "futures",
+                "side": p.get("side"),
+                "contracts": float(p.get("contracts", 0) or p.get("size", 0)),
+                "entryPrice": float(p.get("entryPrice") or info.get("entryPrice") or 0),
+                "markPrice": float(p.get("markPrice") or info.get("markPrice") or 0),
+                "liquidationPrice": float(p.get("liquidationPrice") or info.get("liquidationPrice") or 0),
+                "leverage": str(p.get("leverage") or info.get("leverage") or "1"),
+                "unrealizedPnl": float(p.get("unrealizedPnl") or info.get("unrealizedProfit") or 0),
+                "percentage": float(p.get("percentage") or info.get("percentage") or 0),
+                "take_profit": s.get("take_profit"),
+                "stop_loss": s.get("stop_loss"),
+            })
+
+        # Spot
+        for a in spot_assets:
+            symbol = f"{a}/USDT"
+            qty = spot_data["total"][a]
+            s = summaries.get(symbol, {})
+            t = tickers.get(symbol, {})
+            mark = t.get("last") or t.get("close") or 0
+            entry = s.get("avg_price", 0)
+            pnl = (mark - entry) * qty if entry > 0 else 0
+            pnl_pct = (pnl / (entry * qty)) * 100 if entry > 0 else 0
+            
+            open_positions.append({
+                "symbol": symbol,
+                "market": "spot",
+                "side": "long",
+                "contracts": float(qty),
+                "entryPrice": float(entry),
+                "markPrice": float(mark),
+                "unrealizedPnl": float(pnl),
+                "percentage": float(pnl_pct),
+                "take_profit": s.get("take_profit"),
+                "stop_loss": s.get("stop_loss"),
+                "leverage": "1",
+            })
+
     except Exception as e:
-        logger.error(f"Futures Pos Fetch Error: {e}")
+        logger.error(f"Ultimate Pos Fetch Error: {e}")
     finally:
         if exchange_fut: await exchange_fut.close()
-
-    # 2. Spot
-    spot_assets = []
-    spot_balance = {}
-    if include_spot:
-        exchange_spot = await get_exchange_client(user_id, token, "spot")
-        try:
-            balance = await exchange_spot.fetch_balance()
-            spot_balance = balance.get("total", {})
-            spot_assets = [a for a, q in spot_balance.items() if q > 0 and a not in ["USDT", "USDC", "USD"]]
-        except Exception as e:
-            logger.error(f"Spot Balance Fetch Error: {e}")
-        finally:
-            if exchange_spot: await exchange_spot.close()
-
-    # 3. Bulk Fetch Summaries for EVERYTHING
-    all_symbols = [p["symbol"] for p in active_pos] + [f"{a}/USDT" for a in spot_assets]
-    summaries = {}
-    if all_symbols:
-        try:
-            async with httpx.AsyncClient() as client:
-                bulk_resp = await client.post(
-                    f"{ORDERS_SERVICE_URL}/orders/summaries/bulk",
-                    json={"user_id": user_id, "symbols": all_symbols},
-                    timeout=5.0
-                )
-                if bulk_resp.status_code == 200:
-                    summaries = bulk_resp.json()
-        except Exception as e:
-            logger.error(f"Bulk Summary Error: {e}")
-
-    # 1b. Process Futures
-    for p in active_pos:
-        s = summaries.get(p["symbol"], {})
-        size = float(p.get("contracts", 0) or p.get("size", 0))
-        info = p.get("info", {})
-        lev = p.get("leverage") or info.get("leverage") or "1"
-        open_positions.append({
-            "symbol": p["symbol"],
-            "market": "futures",
-            "side": p.get("side"),
-            "contracts": size,
-            "entryPrice": float(p.get("entryPrice") or info.get("entryPrice") or 0),
-            "markPrice": float(p.get("markPrice") or info.get("markPrice") or 0),
-            "liquidationPrice": float(p.get("liquidationPrice") or info.get("liquidationPrice") or 0),
-            "leverage": str(lev),
-            "unrealizedPnl": float(p.get("unrealizedPnl") or info.get("unrealizedProfit") or 0),
-            "percentage": float(p.get("percentage") or info.get("percentage") or 0),
-            "take_profit": s.get("take_profit"),
-            "stop_loss": s.get("stop_loss"),
-        })
-
-    # 2b. Process Spot
-    if spot_assets:
-        # Tickers for spot PnL
-        exchange_spot = await get_exchange_client(user_id, token, "spot")
-        try:
-            symbols = [f"{a}/USDT" for a in spot_assets]
-            tickers = {}
-            try: tickers = await exchange_spot.fetch_tickers(symbols)
-            except: pass
-
-            for a in spot_assets:
-                qty = spot_balance[a]
-                symbol = f"{a}/USDT"
-                s = summaries.get(symbol, {})
-                ticker = tickers.get(symbol, {})
-                mark_price = ticker.get("last") or ticker.get("close") or 0
-                
-                if not mark_price:
-                    try:
-                        t = await exchange_spot.fetch_ticker(symbol)
-                        mark_price = t.get("last", 0)
-                    except: pass
-
-                entry_price = s.get("avg_price", 0)
-                pnl = (mark_price - entry_price) * qty if entry_price > 0 else 0
-                pnl_pct = (pnl / (entry_price * qty)) * 100 if entry_price > 0 else 0
-
-                open_positions.append({
-                    "symbol": symbol,
-                    "market": "spot",
-                    "side": "long",
-                    "contracts": float(qty),
-                    "entryPrice": float(entry_price),
-                    "markPrice": float(mark_price),
-                    "unrealizedPnl": float(pnl),
-                    "percentage": float(pnl_pct),
-                    "take_profit": s.get("take_profit"),
-                    "stop_loss": s.get("stop_loss"),
-                    "leverage": "1",
-                })
-        finally:
-            if exchange_spot: await exchange_spot.close()
+        if exchange_spot: await exchange_spot.close()
 
     return open_positions
 
