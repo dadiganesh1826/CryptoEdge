@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 import httpx
 import re
+import asyncio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [EXCHANGE] %(message)s")
 logger = logging.getLogger(__name__)
@@ -213,90 +214,90 @@ async def get_positions(
     authorization: str = Header(...),
     user_id: str = Header(..., alias="x-user-id"),
 ):
-    """Fetch open futures positions and optionally spot holdings."""
+    """Fetch open futures positions and optionally spot holdings with parallelized data retrieval."""
     token = authorization.replace("Bearer ", "")
-    
     open_positions = []
-    
-    # 1. Fetch Futures Positions
+
+    async def fetch_summary(client, symbol):
+        try:
+            resp = await client.get(f"{ORDERS_SERVICE_URL}/orders/summary/{user_id}/{symbol}", timeout=3.0)
+            return resp.json() if resp.status_code == 200 else {}
+        except: return {}
+
+    # 1. Futures
     exchange_fut = await get_exchange_client(user_id, token, "future")
     try:
         positions = await exchange_fut.fetch_positions()
+        active_pos = [p for p in positions if float(p.get("contracts", 0) or p.get("size", 0)) != 0]
         
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            for p in positions:
-                size = float(p.get("contracts", 0) or p.get("size", 0))
-                if size != 0:
-                    symbol = p.get("symbol")
+        if active_pos:
+            async with httpx.AsyncClient() as client:
+                # Parallel fetch summaries
+                summaries = await asyncio.gather(*[fetch_summary(client, p["symbol"]) for p in active_pos])
+                
+                for p, s in zip(active_pos, summaries):
+                    size = float(p.get("contracts", 0) or p.get("size", 0))
                     info = p.get("info", {})
                     lev = p.get("leverage") or info.get("leverage") or "1"
-                    liq_price = p.get("liquidationPrice") or info.get("liquidationPrice") or 0
-                    entry_price = p.get("entryPrice") or info.get("entryPrice") or 0
-                    pnl = p.get("unrealizedPnl") or info.get("unrealizedProfit") or 0
                     
-                    # Fetch TP/SL from orders summary
-                    tp, sl = None, None
-                    try:
-                        sum_resp = await client.get(f"{ORDERS_SERVICE_URL}/orders/summary/{user_id}/{symbol}")
-                        if sum_resp.status_code == 200:
-                            sum_data = sum_resp.json()
-                            tp = sum_data.get("take_profit")
-                            sl = sum_data.get("stop_loss")
-                    except: pass
-
                     open_positions.append({
-                        "symbol": symbol,
+                        "symbol": p["symbol"],
                         "market": "futures",
                         "side": p.get("side"),
                         "contracts": size,
-                        "entryPrice": float(entry_price),
+                        "entryPrice": float(p.get("entryPrice") or info.get("entryPrice") or 0),
                         "markPrice": float(p.get("markPrice") or info.get("markPrice") or 0),
-                        "liquidationPrice": float(liq_price),
+                        "liquidationPrice": float(p.get("liquidationPrice") or info.get("liquidationPrice") or 0),
                         "leverage": str(lev),
-                        "unrealizedPnl": float(pnl),
+                        "unrealizedPnl": float(p.get("unrealizedPnl") or info.get("unrealizedProfit") or 0),
                         "percentage": float(p.get("percentage") or info.get("percentage") or 0),
-                        "take_profit": tp,
-                        "stop_loss": sl,
+                        "take_profit": s.get("take_profit"),
+                        "stop_loss": s.get("stop_loss"),
                     })
     except Exception as e:
-        logger.error(f"Error fetching futures positions: {e}")
+        logger.error(f"Futures Pos Error: {e}")
     finally:
         if exchange_fut: await exchange_fut.close()
 
-    # 2. Optionally Fetch Spot Holdings
+    # 2. Spot
     if include_spot:
         exchange_spot = await get_exchange_client(user_id, token, "spot")
         try:
             balance = await exchange_spot.fetch_balance()
+            assets = [a for a, q in balance.get("total", {}).items() if q > 0 and a not in ["USDT", "USDC", "USD"]]
             
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                for asset, qty in balance.get("total", {}).items():
-                    if qty > 0 and asset not in ["USDT", "USDC", "USD"]:
-                        # Fetch average entry price and TP/SL for this spot asset
-                        entry_price = 0
-                        tp = None
-                        sl = None
-                        try:
-                            sum_resp = await client.get(f"{ORDERS_SERVICE_URL}/orders/summary/{user_id}/{asset}/USDT")
-                            if sum_resp.status_code == 200:
-                                s_data = sum_resp.json()
-                                entry_price = s_data.get("avg_price", 0)
-                                tp = s_data.get("take_profit")
-                                sl = s_data.get("stop_loss")
-                        except: pass
+            if assets:
+                # Bulk fetch tickers (prices) if supported
+                tickers = {}
+                try:
+                    symbols = [f"{a}/USDT" for a in assets]
+                    tickers = await exchange_spot.fetch_tickers(symbols)
+                except:
+                    # Fallback to individual tickers if bulk fails
+                    pass
 
-                        # Fetch current price for PnL calculation
-                        mark_price = 0
-                        try:
-                            ticker = await exchange_spot.fetch_ticker(f"{asset}/USDT")
-                            mark_price = ticker.get("last", 0)
-                        except: pass
+                async with httpx.AsyncClient() as client:
+                    # Parallel fetch summaries (TP/SL)
+                    summaries = await asyncio.gather(*[fetch_summary(client, f"{a}/USDT") for a in assets])
+                    
+                    for a, s in zip(assets, summaries):
+                        qty = balance["total"][a]
+                        symbol = f"{a}/USDT"
+                        ticker = tickers.get(symbol, {})
+                        mark_price = ticker.get("last") or ticker.get("close") or 0
                         
+                        if not mark_price: # Fallback individual ticker
+                            try:
+                                t = await exchange_spot.fetch_ticker(symbol)
+                                mark_price = t.get("last", 0)
+                            except: pass
+
+                        entry_price = s.get("avg_price", 0)
                         pnl = (mark_price - entry_price) * qty if entry_price > 0 else 0
                         pnl_pct = (pnl / (entry_price * qty)) * 100 if entry_price > 0 else 0
 
                         open_positions.append({
-                            "symbol": f"{asset}/USDT",
+                            "symbol": symbol,
                             "market": "spot",
                             "side": "long",
                             "contracts": float(qty),
@@ -304,12 +305,12 @@ async def get_positions(
                             "markPrice": float(mark_price),
                             "unrealizedPnl": float(pnl),
                             "percentage": float(pnl_pct),
-                            "take_profit": tp,
-                            "stop_loss": sl,
+                            "take_profit": s.get("take_profit"),
+                            "stop_loss": s.get("stop_loss"),
                             "leverage": "1",
                         })
         except Exception as e:
-            logger.error(f"Error fetching spot holdings: {e}")
+            logger.error(f"Spot Pos Error: {e}")
         finally:
             if exchange_spot: await exchange_spot.close()
 
