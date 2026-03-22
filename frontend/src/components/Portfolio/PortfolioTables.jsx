@@ -1,5 +1,7 @@
+// VERIFICATION: 1.0.2 - USE_REF_FIXED
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
+console.log('[Portfolio] PortfolioTables.jsx Loaded - Version 1.0.2');
 import { RefreshCw, TrendingUp, TrendingDown, Minus, Edit2 } from 'lucide-react';
 import useAppStore from '../../store/useAppStore';
 import { getUserOrders, getPositions, cancelOrder as cancelOrderApi, placeOrderDirect, getOrderHistory, updateTPSL } from '../../api/client';
