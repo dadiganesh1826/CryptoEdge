@@ -127,8 +127,9 @@ export function PositionsTable() {
             const data = await getPositions(true);
             const posList = data.positions || data || [];
             setPositions(Array.isArray(posList) ? posList : []);
-        } catch {
-            setPositions([]);
+        } catch (err) {
+            console.warn('Silent refresh failed. Keeping old data.', err);
+            // Don't clear! Keep old data to avoid flicker.
         }
         finally { setLoading(false); }
     };

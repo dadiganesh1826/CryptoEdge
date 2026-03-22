@@ -222,7 +222,6 @@ async def get_positions(
     exchange_fut = await get_exchange_client(user_id, token, "future")
     try:
         positions = await exchange_fut.fetch_positions()
-        await exchange_fut.close()
         
         async with httpx.AsyncClient(timeout=5.0) as client:
             for p in positions:
@@ -261,6 +260,7 @@ async def get_positions(
                     })
     except Exception as e:
         logger.error(f"Error fetching futures positions: {e}")
+    finally:
         if exchange_fut: await exchange_fut.close()
 
     # 2. Optionally Fetch Spot Holdings
@@ -268,7 +268,6 @@ async def get_positions(
         exchange_spot = await get_exchange_client(user_id, token, "spot")
         try:
             balance = await exchange_spot.fetch_balance()
-            await exchange_spot.close()
             
             async with httpx.AsyncClient(timeout=5.0) as client:
                 for asset, qty in balance.get("total", {}).items():
@@ -311,6 +310,7 @@ async def get_positions(
                         })
         except Exception as e:
             logger.error(f"Error fetching spot holdings: {e}")
+        finally:
             if exchange_spot: await exchange_spot.close()
 
     return open_positions
