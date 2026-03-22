@@ -62,14 +62,24 @@ def decode_symbol(encoded: str) -> str:
     return s
 
 
-async def get_exchange_client(user_id: str, auth_token: str, market_type: str = "future") -> ccxt_async.Exchange:
+INTERNAL_SERVICE_KEY = os.getenv("INTERNAL_SERVICE_KEY", "service-sync-secret-2024")
+
+async def get_exchange_client(user_id: str, auth_token: str = None, market_type: str = "future", internal: bool = False) -> ccxt_async.Exchange:
     """Fetch decrypted keys from Auth service and build authenticated CCXT client."""
     async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(
-            f"{AUTH_SERVICE_URL}/auth/keys/{user_id}",
-            headers={"Authorization": f"Bearer {auth_token}"}
-        )
+        if internal:
+            r = await client.get(
+                f"{AUTH_SERVICE_URL}/auth/internal/keys/{user_id}",
+                headers={"x-internal-key": INTERNAL_SERVICE_KEY}
+            )
+        else:
+            r = await client.get(
+                f"{AUTH_SERVICE_URL}/auth/keys/{user_id}",
+                headers={"Authorization": f"Bearer {auth_token}"}
+            )
+        
         if r.status_code != 200:
+            logger.error(f"Failed to fetch keys for {user_id}: {r.status_code} {r.text}")
             raise HTTPException(status_code=401, detail="Could not retrieve exchange credentials")
         data = r.json()
 
@@ -541,6 +551,44 @@ async def get_markets(
     except ccxt.BaseError as e:
         await exchange.close()
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/exchange/order/{user_id}/{order_id}")
+async def get_order_status(
+    user_id: str,
+    order_id: str,
+    symbol: str = Query(..., description="The symbol for the order"),
+    trade_type: str = Query("futures", description="spot or futures"),
+    authorization: Optional[str] = Header(None),
+    x_internal_key: Optional[str] = Header(None),
+):
+    """Fetch the latest status of a specific order from the exchange."""
+    token = (authorization or "").replace("Bearer ", "")
+    market_type = "spot" if "spot" in trade_type.lower() else "future"
+    
+    is_internal = (x_internal_key == INTERNAL_SERVICE_KEY)
+    exchange = await get_exchange_client(user_id, token, market_type, internal=is_internal)
+    
+    try:
+        # Some exchanges (like Binance) require the symbol to fetch a specific order
+        order = await exchange.fetch_order(order_id, symbol)
+        return {
+            "exchange_order_id": order.get("id"),
+            "status": order.get("status"), # CCXT status: open, closed, canceled
+            "filled": order.get("filled"),
+            "average": order.get("average"),
+            "price": order.get("price"),
+            "remaining": order.get("remaining"),
+            "timestamp": order.get("timestamp"),
+        }
+    except ccxt.OrderNotFound:
+        # If not found, it might have been filled/cancelled and archived
+        return {"status": "unknown", "exchange_order_id": order_id}
+    except ccxt.BaseError as e:
+        logger.error(f"Fetch Order Error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        if exchange: await exchange.close()
 
 
 @app.get("/health")

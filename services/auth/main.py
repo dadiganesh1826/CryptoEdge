@@ -330,6 +330,26 @@ async def refresh_token(req: TokenRefreshRequest):
     return {"access_token": create_access_token(user_id), "token_type": "bearer"}
 
 
+INTERNAL_SERVICE_KEY = os.getenv("INTERNAL_SERVICE_KEY", "service-sync-secret-2024")
+
+@app.get("/auth/internal/keys/{user_id}", response_model=KeysResponse)
+async def get_keys_internal(user_id: str, x_internal_key: str = Header(...), db: Session = Depends(get_db)):
+    """Background sync endpoint — retrieve decrypted keys using service-to-service secret."""
+    if x_internal_key != INTERNAL_SERVICE_KEY:
+        raise HTTPException(status_code=403, detail="Invalid internal service key")
+
+    acc = db.query(ExchangeAccount).filter(ExchangeAccount.user_id == uuid.UUID(user_id)).first()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Exchange account not found")
+
+    return KeysResponse(
+        user_id=user_id,
+        exchange=acc.exchange,
+        api_key=decrypt(acc.api_key_encrypted),
+        api_secret=decrypt(acc.api_secret_encrypted),
+    )
+
+
 @app.get("/auth/keys/{user_id}", response_model=KeysResponse)
 async def get_keys(user_id: str, db: Session = Depends(get_db), current_user: str = Depends(get_current_user)):
     """Internal endpoint — retrieve decrypted keys (only accessible with valid JWT)."""

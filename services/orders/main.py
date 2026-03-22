@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 
+import asyncio
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -644,6 +645,66 @@ async def update_tpsl(
 
     db.commit()
     return {"message": "TP/SL updated", "take_profit": tp, "stop_loss": sl}
+
+
+INTERNAL_SERVICE_KEY = os.getenv("INTERNAL_SERVICE_KEY", "service-sync-secret-2024")
+
+async def sync_orders_heartbeat():
+    """Background task to sync open orders with the exchange."""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            db = SessionLocal()
+            try:
+                # Find all open/pending orders that HAVE an exchange_order_id
+                open_orders = db.query(OrderModel).filter(
+                    OrderModel.status.in_(["open", "pending"]),
+                    OrderModel.exchange_order_id.isnot(None)
+                ).all()
+                
+                if not open_orders:
+                    continue
+                
+                logger.info(f"[SYNC] Synchronizing {len(open_orders)} open orders...")
+                
+                for order in open_orders:
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            resp = await client.get(
+                                f"{EXCHANGE_SVC_URL}/exchange/order/{order.user_id}/{order.exchange_order_id}",
+                                params={"symbol": order.symbol, "trade_type": order.trade_type},
+                                headers={"x-internal-key": INTERNAL_SERVICE_KEY}
+                            )
+                            
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                ext_status = data.get("status")
+                                
+                                new_status = None
+                                if ext_status in ["closed", "filled"]:
+                                    new_status = "filled"
+                                    order.filled_at = datetime.now(timezone.utc)
+                                elif ext_status == "canceled":
+                                    new_status = "cancelled"
+                                
+                                if new_status and new_status != order.status:
+                                    logger.info(f"[SYNC] Order {order.id} ({order.symbol}) updated: {order.status} -> {new_status}")
+                                    order.status = new_status
+                                    order.updated_at = datetime.now(timezone.utc)
+                                    db.commit()
+                            else:
+                                logger.error(f"[SYNC] Failed to fetch status for {order.id}: {resp.status_code}")
+                                
+                    except Exception as e:
+                        logger.error(f"[SYNC] Error syncing order {order.id}: {e}")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[SYNC] Heartbeat error: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(sync_orders_heartbeat())
 
 
 @app.get("/health")
