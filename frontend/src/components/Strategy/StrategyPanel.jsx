@@ -284,42 +284,46 @@ export default function StrategyPanel() {
                                 <Plus className="w-3 h-3" /> ADD LEVEL
                             </button>
                         </div>
-                        <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                        <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
                             {customLevels.map((lvl, idx) => (
-                                <div key={idx} className="bg-white/[0.03] p-2 rounded-lg border border-white/5 space-y-2">
-                                    <div className="flex items-center gap-2">
-                                        <div className="flex bg-dark-800 rounded p-0.5">
+                                <div key={idx} className="bg-white/[0.03] p-1.5 rounded-lg border border-white/5 flex flex-col gap-1.5">
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="w-5 h-5 rounded-md bg-dark-600 flex items-center justify-center text-[9px] font-black text-white/20">
+                                            {idx + 1}
+                                        </div>
+                                        <div className="flex bg-dark-800 rounded p-0.5 shrink-0">
                                             <button
                                                 onClick={() => updateLevel(idx, 'type', 'price')}
-                                                className={`px-1.5 py-1 text-[10px] font-bold rounded ${lvl.type === 'price' ? 'bg-accent-cyan/20 text-accent-cyan' : 'text-white/20'}`}
+                                                className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${lvl.type === 'price' ? 'bg-accent-cyan/20 text-accent-cyan' : 'text-white/20'}`}
                                             >$</button>
                                             <button
                                                 onClick={() => updateLevel(idx, 'type', 'percent')}
-                                                className={`px-1.5 py-1 text-[10px] font-bold rounded ${lvl.type === 'percent' ? 'bg-accent-cyan/20 text-accent-cyan' : 'text-white/20'}`}
+                                                className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${lvl.type === 'percent' ? 'bg-accent-cyan/20 text-accent-cyan' : 'text-white/20'}`}
                                             >%</button>
                                         </div>
                                         <input
-                                            type="number" className="input h-8 text-[11px] px-2 flex-1"
-                                            placeholder={lvl.type === 'price' ? "Target Price" : "Drop % from previous"}
+                                            type="number" className="input h-7 text-[10px] px-1.5 flex-1 min-w-[60px]"
+                                            placeholder={lvl.type === 'price' ? "Price" : "Drop %"}
                                             value={lvl.value} onChange={(e) => updateLevel(idx, 'value', e.target.value)}
                                         />
-                                        <button onClick={() => removeLevel(idx)} className="p-1.5 rounded hover:bg-danger/10 text-danger/30 hover:text-danger">
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="text-[10px] text-white/30 font-semibold px-2">AMT</div>
+                                        <div className="text-[9px] text-white/20 font-bold">AMT</div>
                                         <input
-                                            type="number" className="input h-8 text-[11px] px-2 flex-1"
-                                            placeholder="Order Amount (USDT)"
+                                            type="number" className="input h-7 text-[10px] px-1.5 w-16"
+                                            placeholder="Sum"
                                             value={lvl.amount} onChange={(e) => updateLevel(idx, 'amount', e.target.value)}
                                         />
-                                        {lvl.type === 'percent' && preview[idx] && (
-                                            <div className="text-[10px] font-mono text-success bg-success/5 px-2 py-1 rounded">
-                                                est. ${preview[idx].price.toLocaleString()}
-                                            </div>
-                                        )}
+                                        <button onClick={() => removeLevel(idx)} className="p-1 rounded hover:bg-danger/10 text-danger/30 hover:text-danger">
+                                            <Trash2 className="w-3 h-3" />
+                                        </button>
                                     </div>
+                                    {lvl.type === 'percent' && preview[idx] && (
+                                        <div className="flex items-center justify-between px-1">
+                                            <div className="text-[9px] font-medium text-white/20">Estimated Entry:</div>
+                                            <div className="text-[10px] font-mono font-bold text-accent-cyan">
+                                                ${preview[idx].price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -371,8 +375,8 @@ export default function StrategyPanel() {
                                     ))}
                                 </div>
                                 <div className="px-3 pb-2 pt-1 border-t border-white/5 flex justify-between text-[10px] text-white/30">
-                                    <span>Total Value: ${preview.reduce((acc, l) => acc + (isAdvanced ? l.amount : parseFloat(amount || 0)), 0).toLocaleString()}</span>
-                                    <span>Margin: ${(preview.reduce((acc, l) => acc + (isAdvanced ? l.amount : parseFloat(amount || 0)), 0) / leverage).toFixed(2)} USDT</span>
+                                    <span>Total Value: ${preview.reduce((acc, l) => acc + (isAdvanced ? (parseFloat(l.amount) || 0) : parseFloat(amount || 0)), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                    <span>Margin: ${(preview.reduce((acc, l) => acc + (isAdvanced ? (parseFloat(l.amount) || 0) : parseFloat(amount || 0)), 0) / (tradeType === 'spot' ? 1 : (parseFloat(leverage) || 1))).toFixed(2)} USDT</span>
                                 </div>
                             </div>
                         )}
