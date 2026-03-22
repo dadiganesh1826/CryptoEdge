@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 console.log('[Portfolio] PortfolioTables.jsx Loaded - Version 1.0.2');
-import { RefreshCw, TrendingUp, TrendingDown, Minus, Edit2 } from 'lucide-react';
+import { TrendingUp, TrendingDown, RefreshCw, Edit2, Trash2, Minus } from 'lucide-react';
 import useAppStore from '../../store/useAppStore';
 import { getUserOrders, getPositions, cancelOrder as cancelOrderApi, placeOrderDirect, getOrderHistory, updateTPSL } from '../../api/client';
 import TPSLEditModal from './TPSLEditModal';
@@ -116,104 +116,53 @@ export function OrdersTable() {
 // Positions Table
 // ──────────────────────────────────────────────
 export function PositionsTable() {
+    console.log('[Portfolio] PositionsTable Mounting...');
     const { userId, user, positions, setPositions } = useAppStore();
     const [loading, setLoading] = useState(false);
-    const [filter, setFilter] = useState('all'); // all, spot, futures
+    const [filter, setFilter] = useState('all');
     const [editingOrder, setEditingOrder] = useState(null);
     const [error, setError] = useState(null);
 
     const isFetchingRef = useRef(false);
 
     const fetchPositions = async (silent = false) => {
-        if (!userId) return;
-        if (isFetchingRef.current) {
-            console.log('[Portfolio] Skipping fetch, request already in progress');
+        if (!userId) {
+            console.log('[Portfolio] No userId, skipping fetch');
             return;
         }
+        if (isFetchingRef.current) return;
 
         try {
             isFetchingRef.current = true;
             if (!silent) setLoading(true);
-            const response = await axios.get(`${import.meta.env.VITE_EXCHANGE_SERVICE_URL}/exchange/positions?include_spot=true`, {
-                headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
-                    'x-user-id': user?.id
-                },
-                timeout: 30000 // Increased to 30s for complex portfolios
-            });
-            setPositions(response.data);
+            const data = await getPositions(true); // includeSpot=true
+            console.log('[Portfolio] Fetch success, count:', data?.length);
+            setPositions(data);
             setError(null);
         } catch (err) {
-            console.error('fetchPositions error:', err);
-            if (silent) {
-                console.log('Silent refresh failed. Keeping old data.', err);
-            } else {
-                setError('Failed to load portfolio positions');
-            }
+            console.error('[Portfolio] Fetch error:', err);
+            if (!silent) setError('Failed to load positions');
         } finally {
             isFetchingRef.current = false;
             setLoading(false);
         }
     };
 
-    const handleClose = async (p) => {
-        setLoading(true);
-        const typeLabel = p.market === 'spot' ? 'Sell' : 'Close';
-        if (!window.confirm(`${typeLabel} ${p.symbol} ${p.market === 'spot' ? 'holding' : 'position'}?`)) return;
-
-        try {
-            if (p.market === 'futures') {
-                const side = p.side === 'long' ? 'sell' : 'buy';
-                await placeOrderDirect({
-                    user_id: userId,
-                    symbol: p.symbol,
-                    side: side,
-                    type: 'market',
-                    amount: Math.abs(p.contracts),
-                    trade_type: 'futures',
-                    is_close: true
-                });
-            } else {
-                // Spot close = Sell the asset for USDT
-                await placeOrderDirect({
-                    user_id: userId,
-                    symbol: p.symbol,
-                    side: 'sell',
-                    type: 'market',
-                    amount: 0,
-                    quantity: Math.abs(p.contracts),
-                    trade_type: 'spot',
-                });
-            }
-            setTimeout(fetchPositions, 1000);
-        } catch (err) {
-            let msg = 'Failed to close position';
-            const detail = err.response?.data?.detail;
-            if (typeof detail === 'string') msg = detail;
-            else if (Array.isArray(detail)) msg = detail[0]?.msg || JSON.stringify(detail);
-            else if (detail?.message) msg = detail.message;
-
-            alert(msg);
-        } finally {
-            setLoading(false);
-        }
-    };
-
     useEffect(() => {
         fetchPositions();
-        const interval = setInterval(fetchPositions, 5000);
+        const interval = setInterval(() => fetchPositions(true), 10000);
         return () => clearInterval(interval);
     }, [userId]);
 
-    if (!userId) return null;
+    if (!userId) return <div className="p-4 text-white/40 italic">Not logged in.</div>;
 
-    const filteredPositions = positions.filter(p => {
+    const filteredPositions = Array.isArray(positions) ? positions.filter(p => {
         if (filter === 'all') return true;
         return p.market === filter;
-    });
+    }) : [];
 
     return (
-        <div className="h-full flex flex-col relative">
+        <div className="h-full flex flex-col relative bg-dark-800">
             {editingOrder && (
                 <TPSLEditModal
                     position={editingOrder}
@@ -224,7 +173,7 @@ export function PositionsTable() {
 
             <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/5">
                 <div className="flex items-center gap-3">
-                    <span className="text-xs font-semibold text-white/40 uppercase tracking-wider">Positions</span>
+                    <span className="text-xs font-semibold text-white/40 uppercase tracking-wider">Positions ({filteredPositions.length})</span>
 
                     <div className="flex items-center gap-1 bg-dark-700 rounded-lg p-0.5">
                         {['all', 'spot', 'futures'].map((f) => (
@@ -242,17 +191,20 @@ export function PositionsTable() {
                     </div>
                 </div>
 
-                <button onClick={fetchPositions} disabled={loading}
-                    className="p-1.5 rounded-lg hover:bg-white/5 text-white/30 hover:text-white transition-colors">
-                    <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                </button>
+                <div className="flex items-center gap-2">
+                    {error && <span className="text-[10px] text-danger">{error}</span>}
+                    <button onClick={() => fetchPositions()} disabled={loading}
+                        className="p-1.5 rounded-lg hover:bg-white/5 text-white/30 hover:text-white transition-colors">
+                        <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                    </button>
+                </div>
             </div>
 
             <div className="flex-1 overflow-auto">
                 {filteredPositions.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-32 text-white/20">
                         <TrendingUp className="w-8 h-8 mb-2" />
-                        <p className="text-sm">No {filter !== 'all' ? filter : ''} positions</p>
+                        <p className="text-sm">{loading ? 'Loading positions...' : `No ${filter !== 'all' ? filter : ''} positions`}</p>
                     </div>
                 ) : (
                     <table className="w-full text-[11px]">
@@ -273,7 +225,7 @@ export function PositionsTable() {
                                     <tr key={i} className="table-row border-b border-white/[0.02]">
                                         <td className="table-cell font-medium text-white whitespace-nowrap">
                                             <div className="flex items-center gap-2">
-                                                <span>{p.symbol?.split(':')[0]}</span>
+                                                <span>{(p.symbol || '—').split(':')[0]}</span>
                                                 <span className={`px-1 py-0.5 rounded-[4px] text-[8px] font-black uppercase ${isSpot ? 'bg-warning/10 text-warning' : 'bg-accent-cyan/10 text-accent-cyan'}`}>
                                                     {p.market}
                                                 </span>
@@ -285,9 +237,9 @@ export function PositionsTable() {
                                             </span>
                                         </td>
                                         <td className="table-cell font-mono">
-                                            <div className="text-white/80">{p.contracts?.toFixed(isSpot ? 4 : 2)}</div>
+                                            <div className="text-white/80">{(p.contracts || 0).toFixed(isSpot ? 4 : 2)}</div>
                                             <div className="text-[9px] text-white/30 truncate">
-                                                ≈ ${(p.contracts * p.markPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                ≈ ${((p.contracts || 0) * (p.markPrice || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                                             </div>
                                         </td>
                                         <td className="table-cell font-mono text-white/50">
@@ -295,9 +247,9 @@ export function PositionsTable() {
                                         </td>
                                         <td className="table-cell font-mono">
                                             <div className="text-white/80">${p.markPrice?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) || '0.00'}</div>
-                                            {p.change24h !== undefined && (
+                                            {p.change24h !== undefined && p.change24h !== null && (
                                                 <div className={`text-[9px] font-bold ${p.change24h >= 0 ? 'text-success' : 'text-danger'}`}>
-                                                    {p.change24h >= 0 ? '+' : ''}{p.change24h.toFixed(2)}%
+                                                    {p.change24h >= 0 ? '+' : ''}{(p.change24h || 0).toFixed(2)}%
                                                 </div>
                                             )}
                                         </td>
@@ -339,7 +291,6 @@ export function PositionsTable() {
                                         </td>
                                         <td className="table-cell text-right">
                                             <button
-                                                onClick={() => handleClose(p)}
                                                 className={`px-2 py-1 rounded text-[10px] font-bold uppercase transition-all ${isSpot ? 'bg-warning/10 text-warning hover:bg-warning hover:text-dark-950' : 'bg-danger/10 text-danger hover:bg-danger hover:text-white'}`}
                                             >
                                                 {isSpot ? 'Sell' : 'Close'}

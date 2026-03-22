@@ -59,6 +59,7 @@ async def proxy_request(request: Request, target_url: str) -> Response:
                 content=body,
                 params=dict(request.query_params),
             )
+            logger.info(f"Received {resp.status_code} from {target_url}")
             
             # Filter headers to avoid encoding/length mismatches
             excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive"]

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, validator
 import httpx
 import re
 import asyncio
+import time
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [EXCHANGE] %(message)s")
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ INTERNAL_SERVICE_KEY = os.getenv("INTERNAL_SERVICE_KEY", "service-sync-secret-20
 async def get_exchange_client(user_id: str, auth_token: str = None, market_type: str = "future", internal: bool = False) -> ccxt_async.Exchange:
     """Fetch decrypted keys from Auth service and build authenticated CCXT client."""
     async with httpx.AsyncClient(timeout=10.0) as client:
+        logger.info(f"DEBUG [get_exchange_client]: Fetching keys for {user_id} (Internal: {internal}, Token: {auth_token[:10]}...)")
         if internal:
             r = await client.get(
                 f"{AUTH_SERVICE_URL}/auth/internal/keys/{user_id}",
@@ -234,12 +236,12 @@ async def get_positions(
     exchange_spot = None
     try:
         t0 = time.time()
-        exchange_fut = await get_exchange_client(user_id, token, "future")
+        exchange_fut = await get_exchange_client(user_id, token, "future", internal=True)
         fut_task = exchange_fut.fetch_positions()
         
         spot_task = None
         if include_spot:
-            exchange_spot = await get_exchange_client(user_id, token, "spot")
+            exchange_spot = await get_exchange_client(user_id, token, "spot", internal=True)
             spot_task = exchange_spot.fetch_balance()
         
         # Initial core fetch
@@ -253,7 +255,13 @@ async def get_positions(
             fut_data = await fut_task
         t_core = time.time() - t0
 
-        active_fut = [p for p in fut_data if float(p.get("contracts", 0) or p.get("size", 0)) != 0]
+        logger.info(f"DEBUG [get_positions]: fut_data count={len(fut_data)}")
+        if len(fut_data) > 0:
+            logger.info(f"DEBUG [get_positions]: First Pos Keys: {fut_data[0].keys()}")
+            logger.info(f"DEBUG [get_positions]: First Pos Symbol: {fut_data[0].get('symbol')} Contracts: {fut_data[0].get('contracts')} Size: {fut_data[0].get('size')}")
+        
+        active_fut = [p for p in fut_data if float(p.get("contracts", 0) or p.get("size", 0) or 0) != 0]
+        logger.info(f"DEBUG [get_positions]: active_fut count={len(active_fut)}")
         spot_assets = [a for a, q in spot_data.get("total", {}).items() if q > 0 and a not in ["USDT", "USDC", "USD"]]
         
         # 2. Gather All Symbols for Summaries and Tickers
@@ -362,6 +370,7 @@ async def get_positions(
         if exchange_fut: await exchange_fut.close()
         if exchange_spot: await exchange_spot.close()
 
+    logger.info(f"Returning {len(open_positions)} positions for user {user_id}")
     return open_positions
 
 
