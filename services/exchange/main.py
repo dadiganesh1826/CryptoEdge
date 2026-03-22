@@ -214,7 +214,8 @@ async def get_positions(
     authorization: str = Header(...),
     user_id: str = Header(..., alias="x-user-id"),
 ):
-    """Fetch all portfolio data with maximum parallelism to prevent timeouts."""
+    """Fetch all portfolio data with maximum parallelism and high-resolution telemetry."""
+    start_total = time.time()
     token = authorization.replace("Bearer ", "")
     open_positions = []
 
@@ -222,6 +223,7 @@ async def get_positions(
     exchange_fut = None
     exchange_spot = None
     try:
+        t0 = time.time()
         exchange_fut = await get_exchange_client(user_id, token, "future")
         fut_task = exchange_fut.fetch_positions()
         
@@ -239,12 +241,12 @@ async def get_positions(
             spot_data = results[1] if not isinstance(results[1], Exception) else {}
         else:
             fut_data = await fut_task
+        t_core = time.time() - t0
 
         active_fut = [p for p in fut_data if float(p.get("contracts", 0) or p.get("size", 0)) != 0]
         spot_assets = [a for a, q in spot_data.get("total", {}).items() if q > 0 and a not in ["USDT", "USDC", "USD"]]
         
         # 2. Gather All Symbols for Summaries and Tickers
-        # Map symbol -> current_qty
         symbol_qtys = {}
         for p in active_fut:
             symbol_qtys[p["symbol"]] = float(p.get("contracts", 0) or p.get("size", 0))
@@ -252,8 +254,9 @@ async def get_positions(
             symbol_qtys[f"{a}/USDT"] = float(spot_data["total"][a])
 
         all_symbols = list(symbol_qtys.keys())
+        spot_symbols = [f"{a}/USDT" for a in spot_assets]
 
-        # 3. Parallel Fetch Summaries & Bulk Tickers
+        # 3. Parallel Fetch Summaries & BULK Tickers (Nuclear Option)
         summaries = {}
         tickers = {}
         
@@ -266,30 +269,30 @@ async def get_positions(
                         json={"user_id": user_id, "items": items}, timeout=5.0)
                     return resp.json() if resp.status_code == 200 else {}
             except Exception as e:
-                logger.error(f"Bulk Summary Request Error: {e}")
+                logger.error(f"Bulk Summary Error: {e}")
                 return {}
 
-        async def fetch_bulk_tickers():
+        async def fetch_nuclear_tickers():
             if not spot_symbols or not exchange_spot: return {}
-            try: return await exchange_spot.fetch_tickers(spot_symbols)
-            except: return {}
+            try:
+                # NUCLEAR OPTION: Fetch ALL tickers from the exchange once.
+                # This is much faster than individual calls if the account has many assets.
+                all_tickers = await exchange_spot.fetch_tickers()
+                # Filter for only what we need
+                return {s: all_tickers[s] for s in spot_symbols if s in all_tickers}
+            except Exception as e:
+                logger.error(f"Nuclear Ticker Error: {e}")
+                # Fallback to specific symbols if exchange doesn't support global fetch_tickers()
+                try: return await exchange_spot.fetch_tickers(spot_symbols)
+                except: return {}
 
-        results = await asyncio.gather(fetch_bulk_summaries(), fetch_bulk_tickers())
+        t1 = time.time()
+        results = await asyncio.gather(fetch_bulk_summaries(), fetch_nuclear_tickers())
         summaries = results[0]
         tickers = results[1]
+        t_bulk = time.time() - t1
 
-        # 4. Handle Missing Tickers in Parallel (Fallback)
-        missing_spot = [s for s in spot_symbols if not tickers.get(s)]
-        if missing_spot and exchange_spot:
-            async def safe_fetch(s):
-                try: return s, await exchange_spot.fetch_ticker(s)
-                except: return s, {}
-            
-            fallback_results = await asyncio.gather(*[safe_fetch(s) for s in missing_spot])
-            for s, t in fallback_results:
-                tickers[s] = t
-
-        # 5. Build Final Response
+        # 4. Final Processing & Build Response
         # Futures
         for p in active_fut:
             s = summaries.get(p["symbol"], {})
@@ -339,6 +342,9 @@ async def get_positions(
 
         # SORT BY VALUE ($) DESCENDING
         open_positions.sort(key=lambda x: abs(x["contracts"] * x["markPrice"]), reverse=True)
+        
+        t_total = time.time() - start_total
+        logger.info(f"PERF [get_positions]: Total={t_total:.2f}s (Core={t_core:.2f}s, Bulk={t_bulk:.2f}s) Symbols={len(all_symbols)}")
 
     except Exception as e:
         logger.error(f"Ultimate Pos Fetch Error: {e}")

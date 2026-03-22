@@ -113,25 +113,44 @@ export function OrdersTable() {
 // Positions Table
 // ──────────────────────────────────────────────
 export function PositionsTable() {
-    const { userId, positions, setPositions } = useAppStore();
+    const { userId, user, positions, setPositions } = useAppStore();
     const [loading, setLoading] = useState(false);
     const [filter, setFilter] = useState('all'); // all, spot, futures
     const [editingOrder, setEditingOrder] = useState(null);
+    const [error, setError] = useState(null);
 
-    const fetchPositions = async () => {
+    const isFetchingRef = useRef(false);
+
+    const fetchPositions = async (silent = false) => {
         if (!userId) return;
-        setLoading(true);
-        try {
-            // getPositions only takes a boolean includeSpot. 
-            // x-user-id is handled by the interceptor.
-            const data = await getPositions(true);
-            const posList = data.positions || data || [];
-            setPositions(Array.isArray(posList) ? posList : []);
-        } catch (err) {
-            console.warn('Silent refresh failed. Keeping old data.', err);
-            // Don't clear! Keep old data to avoid flicker.
+        if (isFetchingRef.current) {
+            console.log('[Portfolio] Skipping fetch, request already in progress');
+            return;
         }
-        finally { setLoading(false); }
+
+        try {
+            isFetchingRef.current = true;
+            if (!silent) setLoading(true);
+            const response = await axios.get(`${import.meta.env.VITE_EXCHANGE_SERVICE_URL}/exchange/positions?include_spot=true`, {
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                    'x-user-id': user?.id
+                },
+                timeout: 30000 // Increased to 30s for complex portfolios
+            });
+            setPositions(response.data);
+            setError(null);
+        } catch (err) {
+            console.error('fetchPositions error:', err);
+            if (silent) {
+                console.log('Silent refresh failed. Keeping old data.', err);
+            } else {
+                setError('Failed to load portfolio positions');
+            }
+        } finally {
+            isFetchingRef.current = false;
+            setLoading(false);
+        }
     };
 
     const handleClose = async (p) => {
