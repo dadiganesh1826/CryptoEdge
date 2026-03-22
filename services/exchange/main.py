@@ -18,7 +18,8 @@ import re
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [EXCHANGE] %(message)s")
 logger = logging.getLogger(__name__)
 
-AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://localhost:8001")
+AUTH_SERVICE_URL   = os.getenv("AUTH_SERVICE_URL", "http://localhost:8001")
+ORDERS_SERVICE_URL = os.getenv("ORDER_SERVICE_URL", "http://localhost:8004")
 
 app = FastAPI(title="Exchange Service", version="1.0.0", docs_url="/exchange/docs")
 
@@ -312,7 +313,7 @@ async def get_positions(
             logger.error(f"Error fetching spot holdings: {e}")
             if exchange_spot: await exchange_spot.close()
 
-    return {"positions": open_positions}
+    return open_positions
 
 
 @app.post("/exchange/order")

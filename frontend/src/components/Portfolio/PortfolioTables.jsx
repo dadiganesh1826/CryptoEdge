@@ -125,8 +125,11 @@ export function PositionsTable() {
             // getPositions only takes a boolean includeSpot. 
             // x-user-id is handled by the interceptor.
             const data = await getPositions(true);
-            setPositions(data || []);
-        } catch { }
+            const posList = data.positions || data || [];
+            setPositions(Array.isArray(posList) ? posList : []);
+        } catch {
+            setPositions([]);
+        }
         finally { setLoading(false); }
     };
 
@@ -263,10 +266,10 @@ export function PositionsTable() {
                                         <td className="table-cell font-mono text-white/50">${p.markPrice?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) || '0.00'}</td>
                                         <td className="table-cell">
                                             <div className={`font-mono font-bold ${pnl >= 0 ? 'text-success' : 'text-danger'}`}>
-                                                {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}
+                                                {pnl >= 0 ? '+' : ''}${Number(pnl).toFixed(2)}
                                             </div>
                                             <div className={`text-[10px] font-bold ${pnlPct >= 0 ? 'text-success' : 'text-danger'}`}>
-                                                {pnlPct >= 0 ? '+' : ''}{pnlPct?.toFixed(2)}%
+                                                {pnlPct >= 0 ? '+' : ''}{Number(pnlPct).toFixed(2)}%
                                             </div>
                                         </td>
                                         <td className="table-cell">
