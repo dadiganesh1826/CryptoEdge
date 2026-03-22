@@ -72,7 +72,12 @@ export default function TradingChart() {
 
         return () => {
             window.removeEventListener('resize', handleResize);
-            chart.remove();
+            if (chartInstance.current) {
+                chartInstance.current.remove();
+                chartInstance.current = null;
+                candleSeries.current = null;
+                volSeries.current = null;
+            }
         };
     }, []);
 
@@ -93,20 +98,22 @@ export default function TradingChart() {
                     value: c.volume,
                     color: c.close >= c.open ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)',
                 }));
-                candleSeries.current?.setData(candles);
+                if (!chartInstance.current || !candleSeries.current) return;
+
+                candleSeries.current.setData(candles);
                 volSeries.current?.setData(vols);
-                chartInstance.current?.timeScale().fitContent();
+                chartInstance.current.timeScale().fitContent();
 
                 // Save the very last candle so we can update it in real-time
                 lastCandleRef.current = { ...candles[candles.length - 1] };
             })
-            .catch(() => { })
+            .catch((err) => { console.error('OHLCV Error:', err); })
             .finally(() => setLoading(false));
     }, [selectedSymbol, timeframe, isConnected]);
 
     // Update last candle on price tick
     useEffect(() => {
-        if (!currentPrice || !candleSeries.current || !lastCandleRef.current) return;
+        if (!currentPrice || !candleSeries.current || !chartInstance.current || !lastCandleRef.current) return;
 
         const lc = lastCandleRef.current;
         const updatedCandle = {
