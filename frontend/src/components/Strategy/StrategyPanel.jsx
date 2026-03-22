@@ -6,11 +6,30 @@ import { createStrategy, stopStrategy } from '../../api/client';
 // Pure calculation — exported for reuse
 export function calcLadderLevels(basePrice, dropPct, levels, isAdvanced, customLevels) {
     if (isAdvanced) {
-        return customLevels.map((l, i) => ({
-            level: i + 1,
-            price: parseFloat(l.price) || 0,
-            amount: parseFloat(l.amount) || 0
-        })).filter(l => l.price > 0);
+        const result = [];
+        let lastPrice = parseFloat(basePrice) || 0;
+
+        customLevels.forEach((l, i) => {
+            let price = 0;
+            const val = parseFloat(l.value) || 0;
+            if (l.type === 'percent') {
+                price = lastPrice * (1 - val / 100);
+            } else {
+                price = val;
+            }
+
+            if (price > 0) {
+                result.push({
+                    level: i + 1,
+                    price: parseFloat(price.toFixed(6)),
+                    amount: parseFloat(l.amount) || 0,
+                    type: l.type,
+                    inputValue: l.value
+                });
+                lastPrice = price;
+            }
+        });
+        return result;
     }
     const result = [];
     let price = parseFloat(basePrice);
@@ -43,13 +62,21 @@ export default function StrategyPanel() {
     const [previewOpen, setPreviewOpen] = useState(true);
 
     const [customLevels, setCustomLevels] = useState([
-        { price: '', amount: '100' },
-        { price: '', amount: '200' }
+        { type: 'price', value: '', amount: '100' },
+        { type: 'percent', value: '3', amount: '200' }
     ]);
 
     useEffect(() => {
-        if (currentPrice && !basePrice) setBasePrice(currentPrice.toString());
-    }, [currentPrice]);
+        if (currentPrice && !basePrice) {
+            setBasePrice(currentPrice.toString());
+            // Sync first level price if empty
+            if (customLevels[0].type === 'price' && !customLevels[0].value) {
+                const newLevels = [...customLevels];
+                newLevels[0].value = currentPrice.toString();
+                setCustomLevels(newLevels);
+            }
+        }
+    }, [currentPrice, basePrice, customLevels]);
 
     const preview = calcLadderLevels(basePrice, dropPct, levels, isAdvanced, customLevels);
     const activeStrategies = strategies.filter((s) => s.status === 'active');
@@ -59,7 +86,13 @@ export default function StrategyPanel() {
 
         let levels_config = null;
         if (isAdvanced) {
-            levels_config = preview.map(l => ({ price: l.price, amount: l.amount }));
+            levels_config = customLevels.map(l => {
+                const cfg = { amount: parseFloat(l.amount) };
+                if (l.type === 'percent') cfg.drop = parseFloat(l.value);
+                else cfg.price = parseFloat(l.value);
+                return cfg;
+            }).filter(l => (l.drop > 0 || l.price > 0));
+
             if (levels_config.length === 0) { setError('Add at least one valid level'); return; }
         } else {
             if (!basePrice || !dropPct || !levels || !amount) { setError('Fill all required fields'); return; }
@@ -72,10 +105,10 @@ export default function StrategyPanel() {
             const data = await createStrategy({
                 user_id: userId,
                 symbol: selectedSymbol,
-                base_price: isAdvanced ? preview[0].price : parseFloat(basePrice),
+                base_price: isAdvanced ? (customLevels[0].type === 'price' ? parseFloat(customLevels[0].value) : parseFloat(basePrice)) : parseFloat(basePrice),
                 drop_percentage: isAdvanced ? 0 : parseFloat(dropPct),
-                levels: isAdvanced ? preview.length : parseInt(levels),
-                amount_per_order: isAdvanced ? preview[0].amount : parseFloat(amount),
+                levels: isAdvanced ? levels_config.length : parseInt(levels),
+                amount_per_order: isAdvanced ? parseFloat(customLevels[0].amount) : parseFloat(amount),
                 leverage: parseInt(leverage),
                 side,
                 order_type: tradeType,
@@ -103,8 +136,11 @@ export default function StrategyPanel() {
 
     const addLevel = () => {
         const lastLevel = customLevels[customLevels.length - 1];
-        const newPrice = lastLevel?.price ? parseFloat(lastLevel.price) * 0.97 : '';
-        setCustomLevels([...customLevels, { price: newPrice.toString(), amount: lastLevel?.amount || '100' }]);
+        setCustomLevels([...customLevels, {
+            type: lastLevel?.type || 'percent',
+            value: lastLevel?.type === 'percent' ? lastLevel.value : '',
+            amount: lastLevel?.amount || '100'
+        }]);
     };
 
     const removeLevel = (index) => {
@@ -118,6 +154,16 @@ export default function StrategyPanel() {
         setCustomLevels(newLevels);
     };
 
+    const toggleLevelType = (index) => {
+        const newLevels = [...customLevels];
+        const oldType = newLevels[index].type;
+        newLevels[index].type = oldType === 'price' ? 'percent' : 'price';
+        // Reset or convert value if possible? 
+        // For now just toggle and let user enter.
+        if (newLevels[index].type === 'percent' && !newLevels[index].value) newLevels[index].value = '3';
+        setCustomLevels(newLevels);
+    };
+
     const applyMartingale = () => {
         const startAmount = parseFloat(amount) || 100;
         const startPrice = parseFloat(basePrice) || currentPrice || 50000;
@@ -125,12 +171,12 @@ export default function StrategyPanel() {
         const drop = parseFloat(dropPct) || 3;
 
         const newLevels = [];
-        let p = startPrice;
-        let a = startAmount;
         for (let i = 0; i < num; i++) {
-            newLevels.push({ price: p.toFixed(2), amount: a.toFixed(2) });
-            p = p * (1 - drop / 100);
-            a = a * 2; // Double every level
+            if (i === 0) {
+                newLevels.push({ type: 'price', value: startPrice.toString(), amount: startAmount.toString() });
+            } else {
+                newLevels.push({ type: 'percent', value: drop.toString(), amount: (startAmount * Math.pow(2, i)).toString() });
+            }
         }
         setCustomLevels(newLevels);
         setIsAdvanced(true);
@@ -240,18 +286,40 @@ export default function StrategyPanel() {
                         </div>
                         <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                             {customLevels.map((lvl, idx) => (
-                                <div key={idx} className="grid grid-cols-[1fr,1fr,32px] gap-2 items-center bg-white/[0.03] p-2 rounded-lg border border-white/5">
-                                    <input
-                                        type="number" className="input h-8 text-[11px] px-2" placeholder="Price"
-                                        value={lvl.price} onChange={(e) => updateLevel(idx, 'price', e.target.value)}
-                                    />
-                                    <input
-                                        type="number" className="input h-8 text-[11px] px-2" placeholder="Amount"
-                                        value={lvl.amount} onChange={(e) => updateLevel(idx, 'amount', e.target.value)}
-                                    />
-                                    <button onClick={() => removeLevel(idx)} className="p-1.5 rounded hover:bg-danger/10 text-danger/30 hover:text-danger">
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
+                                <div key={idx} className="bg-white/[0.03] p-2 rounded-lg border border-white/5 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex bg-dark-800 rounded p-0.5">
+                                            <button
+                                                onClick={() => updateLevel(idx, 'type', 'price')}
+                                                className={`px-1.5 py-1 text-[10px] font-bold rounded ${lvl.type === 'price' ? 'bg-accent-cyan/20 text-accent-cyan' : 'text-white/20'}`}
+                                            >$</button>
+                                            <button
+                                                onClick={() => updateLevel(idx, 'type', 'percent')}
+                                                className={`px-1.5 py-1 text-[10px] font-bold rounded ${lvl.type === 'percent' ? 'bg-accent-cyan/20 text-accent-cyan' : 'text-white/20'}`}
+                                            >%</button>
+                                        </div>
+                                        <input
+                                            type="number" className="input h-8 text-[11px] px-2 flex-1"
+                                            placeholder={lvl.type === 'price' ? "Target Price" : "Drop % from previous"}
+                                            value={lvl.value} onChange={(e) => updateLevel(idx, 'value', e.target.value)}
+                                        />
+                                        <button onClick={() => removeLevel(idx)} className="p-1.5 rounded hover:bg-danger/10 text-danger/30 hover:text-danger">
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <div className="text-[10px] text-white/30 font-semibold px-2">AMT</div>
+                                        <input
+                                            type="number" className="input h-8 text-[11px] px-2 flex-1"
+                                            placeholder="Order Amount (USDT)"
+                                            value={lvl.amount} onChange={(e) => updateLevel(idx, 'amount', e.target.value)}
+                                        />
+                                        {lvl.type === 'percent' && preview[idx] && (
+                                            <div className="text-[10px] font-mono text-success bg-success/5 px-2 py-1 rounded">
+                                                est. ${preview[idx].price.toLocaleString()}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             ))}
                         </div>

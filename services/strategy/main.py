@@ -77,8 +77,18 @@ def get_next_price(last_price: float, drop_percent: float) -> float:
 def calculate_all_levels(base_price: float, drop_pct: float, levels: int, custom_settings=None) -> List[dict]:
     """Generate all ladder levels from base price or custom settings."""
     if custom_settings and isinstance(custom_settings, list):
-        return [{"level": i+1, "price": round(float(l['price']), 6), "amount": float(l.get('amount', 0))} 
-                for i, l in enumerate(custom_settings)]
+        result = []
+        last_price = base_price
+        for i, l in enumerate(custom_settings):
+            amt = float(l.get('amount', 0))
+            if 'drop' in l:
+                price = get_next_price(last_price, float(l['drop']))
+            else:
+                price = float(l.get('price', last_price))
+            
+            result.append({"level": i+1, "price": round(price, 6), "amount": amt})
+            last_price = price
+        return result
 
     result = []
     price = base_price
@@ -111,7 +121,7 @@ class CreateStrategyRequest(BaseModel):
     order_type: str = Field("futures", pattern="^(spot|futures)$")
     take_profit: Optional[float] = None
     stop_loss: Optional[float] = None
-    levels_config: Optional[List[dict]] = None # [{price, amount}]
+    levels_config: Optional[List[dict]] = None # [{price, amount, drop}]
 
     @validator("symbol")
     def upper_symbol(cls, v):
@@ -176,7 +186,13 @@ async def check_and_execute_strategy(strategy_id: str, auth_token: str):
 
         if strategy.custom_settings and len(strategy.custom_settings) >= next_level:
             level_data = strategy.custom_settings[next_level - 1]
-            target_price = float(level_data['price'])
+            if 'drop' in level_data:
+                # Calculate relative to last filled price
+                last_price = strategy.last_filled_price or strategy.base_price
+                target_price = get_next_price(last_price, float(level_data['drop']))
+            else:
+                target_price = float(level_data.get('price', 0))
+            
             order_amount = float(level_data.get('amount', strategy.amount_per_order))
         else:
             # Fallback to fixed logic
