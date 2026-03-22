@@ -47,6 +47,10 @@ async def proxy_request(request: Request, target_url: str) -> Response:
         # Forward headers (excluding host)
         headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
         
+        # Diagnostic: Log presence of Authorization header
+        has_auth = "authorization" in [h.lower() for h in headers.keys()]
+        logger.info(f"Forwarding request to {target_url} (Auth present: {has_auth}, Headers count: {len(headers)})")
+        
         try:
             resp = await client.request(
                 method=request.method,

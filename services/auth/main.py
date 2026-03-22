@@ -36,7 +36,18 @@ ACCESS_EXPIRE_MIN = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
 REFRESH_EXPIRE_D  = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 GOOGLE_CLIENT_ID  = os.getenv("GOOGLE_CLIENT_ID", "")
 
-fernet = Fernet(ENCRYPTION_KEY if len(ENCRYPTION_KEY) == 44 else Fernet.generate_key())
+# Ensure a stable 32-byte Fernet key even if ENCRYPTION_KEY is not 44 chars base64
+if ENCRYPTION_KEY and len(ENCRYPTION_KEY) == 44:
+    fernet_key = ENCRYPTION_KEY
+else:
+    import hashlib, base64
+    # Hash whatever we have to 32 bytes and base64 encode it to 44 chars
+    hashed = hashlib.sha256(ENCRYPTION_KEY if ENCRYPTION_KEY else b"default-unsafe-key").digest()
+    fernet_key = base64.urlsafe_b64encode(hashed)
+    if not ENCRYPTION_KEY:
+        logger.warning("No ENCRYPTION_KEY found in environment! Using a deterministic default (UNSAFE).")
+
+fernet = Fernet(fernet_key)
 
 # ──────────────────────────────────────────────
 # Database
@@ -116,6 +127,7 @@ def verify_token(token: str) -> str:
             raise HTTPException(status_code=401, detail="Invalid token")
         return user_id
     except JWTError as e:
+        logger.warning(f"JWT Verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"Token error: {e}")
 
 
@@ -381,10 +393,10 @@ async def disconnect(user_id: str, db: Session = Depends(get_db), current_user: 
     """Remove stored credentials."""
     if current_user != user_id:
         raise HTTPException(status_code=403, detail="Cannot delete another user's account")
-    user = db.query(UserModel).filter(UserModel.id == uuid.UUID(user_id)).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    db.delete(user)
+    user_acc = db.query(ExchangeAccount).filter(ExchangeAccount.user_id == uuid.UUID(user_id)).first()
+    if not user_acc:
+        raise HTTPException(status_code=404, detail="Exchange connection not found")
+    db.delete(user_acc)
     db.commit()
     logger.info(f"User {user_id} disconnected and keys deleted")
     return {"message": "Credentials removed successfully"}
