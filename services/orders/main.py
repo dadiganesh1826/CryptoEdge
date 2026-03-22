@@ -513,9 +513,13 @@ async def get_order_history(user_id: str, db: Session = Depends(get_db)):
             side=o.side,
             order_type=o.order_type,
             trade_type=o.trade_type,
+            exchange_order_id=o.exchange_order_id,
             status=o.status,
             realized_pnl=o.realized_pnl,
             is_close=bool(o.is_close),
+            take_profit=o.take_profit,
+            stop_loss=o.stop_loss,
+            filled_at=o.filled_at,
             created_at=o.created_at
         )
         for o in orders
