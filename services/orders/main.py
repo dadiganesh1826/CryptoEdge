@@ -455,7 +455,7 @@ async def get_bulk_summaries(req: BulkSummaryRequest, db: Session = Depends(get_
             OrderModel.user_id == user_uuid,
             OrderModel.symbol == symbol.upper(),
             OrderModel.side == "buy",
-            OrderModel.status == "filled",
+            OrderModel.status.in_(["filled", "partially_filled", "open"]),
             OrderModel.is_close == 0
         ).all()
         
@@ -479,12 +479,17 @@ async def get_bulk_summaries(req: BulkSummaryRequest, db: Session = Depends(get_
 @app.get("/orders/summary/{user_id}/{symbol:path}")
 async def get_order_summary(user_id: str, symbol: str, db: Session = Depends(get_db)):
     """Calculate weighted average entry price for a symbol based on filled buy orders."""
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid user ID format")
+
     # Find all filled buy orders for this symbol
     orders = db.query(OrderModel).filter(
-        OrderModel.user_id == uuid.UUID(user_id),
+        OrderModel.user_id == user_uuid,
         OrderModel.symbol == symbol.upper(),
         OrderModel.side == "buy",
-        OrderModel.status == "filled",
+        OrderModel.status.in_(["filled", "partially_filled", "open"]),
         OrderModel.is_close == 0
     ).all()
     

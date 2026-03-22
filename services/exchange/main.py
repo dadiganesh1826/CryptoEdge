@@ -286,6 +286,7 @@ async def get_positions(
         for p in active_fut:
             s = summaries.get(p["symbol"], {})
             info = p.get("info", {})
+            t = tickers.get(p["symbol"], {})
             open_positions.append({
                 "symbol": p["symbol"],
                 "market": "futures",
@@ -297,6 +298,7 @@ async def get_positions(
                 "leverage": str(p.get("leverage") or info.get("leverage") or "1"),
                 "unrealizedPnl": float(p.get("unrealizedPnl") or info.get("unrealizedProfit") or 0),
                 "percentage": float(p.get("percentage") or info.get("percentage") or 0),
+                "change24h": float(t.get("percentage") or 0),
                 "take_profit": s.get("take_profit"),
                 "stop_loss": s.get("stop_loss"),
             })
@@ -321,10 +323,14 @@ async def get_positions(
                 "markPrice": float(mark),
                 "unrealizedPnl": float(pnl),
                 "percentage": float(pnl_pct),
+                "change24h": float(t.get("percentage") or 0),
                 "take_profit": s.get("take_profit"),
                 "stop_loss": s.get("stop_loss"),
                 "leverage": "1",
             })
+
+        # SORT BY VALUE ($) DESCENDING
+        open_positions.sort(key=lambda x: abs(x["contracts"] * x["markPrice"]), reverse=True)
 
     except Exception as e:
         logger.error(f"Ultimate Pos Fetch Error: {e}")

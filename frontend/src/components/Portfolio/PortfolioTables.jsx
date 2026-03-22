@@ -271,8 +271,13 @@ export function PositionsTable() {
                                         <td className="table-cell font-mono text-white/50">
                                             {p.entryPrice > 0 ? `$${p.entryPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}` : '—'}
                                         </td>
-                                        <td className="table-cell font-mono text-white/50">
-                                            ${p.markPrice?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) || '0.00'}
+                                        <td className="table-cell font-mono">
+                                            <div className="text-white/80">${p.markPrice?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) || '0.00'}</div>
+                                            {p.change24h !== undefined && (
+                                                <div className={`text-[9px] font-bold ${p.change24h >= 0 ? 'text-success' : 'text-danger'}`}>
+                                                    {p.change24h >= 0 ? '+' : ''}{p.change24h.toFixed(2)}%
+                                                </div>
+                                            )}
                                         </td>
                                         <td className="table-cell">
                                             {p.entryPrice > 0 ? (
