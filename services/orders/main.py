@@ -437,40 +437,73 @@ async def get_strategy_orders(strategy_id: str, db: Session = Depends(get_db)):
     }
 
 
+class BulkSummaryItem(BaseModel):
+    symbol: str
+    current_qty: float = 0.0
+
 class BulkSummaryRequest(BaseModel):
     user_id: str
-    symbols: list[str]
+    items: list[BulkSummaryItem]
 
 @app.post("/orders/summaries/bulk")
 async def get_bulk_summaries(req: BulkSummaryRequest, db: Session = Depends(get_db)):
-    """Fetch weighted average entry prices for multiple symbols in one go."""
+    """Fetch weighted average entry prices for multiple symbols using LIFO matching."""
     results = {}
     try:
         user_uuid = uuid.UUID(req.user_id)
     except:
         return {}
 
-    for symbol in req.symbols:
+    for item in req.items:
+        symbol = item.symbol
+        needed_qty = item.current_qty
+        
+        # Get buy orders in reverse chronological order
         orders = db.query(OrderModel).filter(
             OrderModel.user_id == user_uuid,
             OrderModel.symbol == symbol.upper(),
             OrderModel.side == "buy",
             OrderModel.status.in_(["filled", "partially_filled", "open"]),
             OrderModel.is_close == 0
-        ).all()
+        ).order_by(OrderModel.created_at.desc()).all()
         
         if not orders:
             results[symbol] = {"avg_price": 0, "total_qty": 0}
             continue
             
-        total_cost = sum(o.price * o.quantity for o in orders if o.price and o.quantity)
-        total_qty = sum(o.quantity for o in orders if o.quantity)
-        avg_price = total_cost / total_qty if total_qty > 0 else 0
+        remaining_needed = needed_qty
+        total_cost = 0.0
+        matched_qty = 0.0
         
-        latest = orders[-1]
+        # Walk back through orders until we cover the current qty
+        # If needed_qty is 0 (spot dust), just take the latest one anyway to show something
+        if needed_qty <= 0:
+            latest = orders[0]
+            results[symbol] = {
+                "avg_price": latest.price or 0,
+                "total_qty": latest.quantity or 0,
+                "take_profit": latest.take_profit,
+                "stop_loss": latest.stop_loss
+            }
+            continue
+
+        for o in orders:
+            if remaining_needed <= 0: break
+            
+            qty_available = o.quantity or 0
+            qty_to_take = min(qty_available, remaining_needed)
+            
+            total_cost += qty_to_take * (o.price or 0)
+            matched_qty += qty_to_take
+            remaining_needed -= qty_to_take
+        
+        avg_price = total_cost / matched_qty if matched_qty > 0 else 0
+        
+        # For take_profit / stop_loss, we take the absolute latest order's settings
+        latest = orders[0]
         results[symbol] = {
             "avg_price": avg_price,
-            "total_qty": total_qty,
+            "total_qty": matched_qty,
             "take_profit": latest.take_profit,
             "stop_loss": latest.stop_loss
         }

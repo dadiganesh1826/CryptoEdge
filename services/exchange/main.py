@@ -244,9 +244,14 @@ async def get_positions(
         spot_assets = [a for a, q in spot_data.get("total", {}).items() if q > 0 and a not in ["USDT", "USDC", "USD"]]
         
         # 2. Gather All Symbols for Summaries and Tickers
-        fut_symbols = [p["symbol"] for p in active_fut]
-        spot_symbols = [f"{a}/USDT" for a in spot_assets]
-        all_symbols = fut_symbols + spot_symbols
+        # Map symbol -> current_qty
+        symbol_qtys = {}
+        for p in active_fut:
+            symbol_qtys[p["symbol"]] = float(p.get("contracts", 0) or p.get("size", 0))
+        for a in spot_assets:
+            symbol_qtys[f"{a}/USDT"] = float(spot_data["total"][a])
+
+        all_symbols = list(symbol_qtys.keys())
 
         # 3. Parallel Fetch Summaries & Bulk Tickers
         summaries = {}
@@ -255,11 +260,14 @@ async def get_positions(
         async def fetch_bulk_summaries():
             if not all_symbols: return {}
             try:
+                items = [{"symbol": s, "current_qty": q} for s, q in symbol_qtys.items()]
                 async with httpx.AsyncClient() as client:
                     resp = await client.post(f"{ORDERS_SERVICE_URL}/orders/summaries/bulk", 
-                        json={"user_id": user_id, "symbols": all_symbols}, timeout=5.0)
+                        json={"user_id": user_id, "items": items}, timeout=5.0)
                     return resp.json() if resp.status_code == 200 else {}
-            except: return {}
+            except Exception as e:
+                logger.error(f"Bulk Summary Request Error: {e}")
+                return {}
 
         async def fetch_bulk_tickers():
             if not spot_symbols or not exchange_spot: return {}
