@@ -437,7 +437,46 @@ async def get_strategy_orders(strategy_id: str, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/orders/summary/{user_id}/{symbol}")
+class BulkSummaryRequest(BaseModel):
+    user_id: str
+    symbols: list[str]
+
+@app.post("/orders/summaries/bulk")
+async def get_bulk_summaries(req: BulkSummaryRequest, db: Session = Depends(get_db)):
+    """Fetch weighted average entry prices for multiple symbols in one go."""
+    results = {}
+    try:
+        user_uuid = uuid.UUID(req.user_id)
+    except:
+        return {}
+
+    for symbol in req.symbols:
+        orders = db.query(OrderModel).filter(
+            OrderModel.user_id == user_uuid,
+            OrderModel.symbol == symbol.upper(),
+            OrderModel.side == "buy",
+            OrderModel.status == "filled",
+            OrderModel.is_close == 0
+        ).all()
+        
+        if not orders:
+            results[symbol] = {"avg_price": 0, "total_qty": 0}
+            continue
+            
+        total_cost = sum(o.price * o.quantity for o in orders if o.price and o.quantity)
+        total_qty = sum(o.quantity for o in orders if o.quantity)
+        avg_price = total_cost / total_qty if total_qty > 0 else 0
+        
+        latest = orders[-1]
+        results[symbol] = {
+            "avg_price": avg_price,
+            "total_qty": total_qty,
+            "take_profit": latest.take_profit,
+            "stop_loss": latest.stop_loss
+        }
+    return results
+
+@app.get("/orders/summary/{user_id}/{symbol:path}")
 async def get_order_summary(user_id: str, symbol: str, db: Session = Depends(get_db)):
     """Calculate weighted average entry price for a symbol based on filled buy orders."""
     # Find all filled buy orders for this symbol
